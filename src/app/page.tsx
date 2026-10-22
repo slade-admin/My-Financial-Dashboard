@@ -14,67 +14,81 @@ import {
   CartesianGrid,
 } from 'recharts';
 
-interface ExpenseCategory {
-  category: string;
-  icon: string;
-  color: string;
-  total_amount: number;
-  transaction_count: number;
-}
-
-interface DashboardTransaction {
-  id: number | string;
-  account_id?: number | string;
-  source_rail: 'MPESA_DARAJA' | 'EQUITY_JENGA' | 'KCB_BUNI' | 'COOP_BANK' | 'STANCHART' | 'PAYPAL';
-  rail_reference: string;
-  amount: number;
-  currency: string;
-  date: string;
-  merchant_or_party: string;
-  category: string;
-  payment_channel?: string;
-  type: 'debit' | 'credit';
-  balance_after?: number;
-  etims_status?: 'UNFISCALIZED' | 'FISCALIZED' | 'EXEMPT';
-  etims_invoice_id?: string;
-  vat_amount?: number;
-  is_reconciled?: boolean;
-}
-
-interface DashboardAccount {
-  id: number | string;
-  institution_code: string;
-  institution_name: string;
-  account_number_mask: string;
+interface PersonalAccount {
+  id: string | number;
+  name: string;
+  institution: string;
   account_type: string;
   currency: string;
   balance: number;
-  created_at: string;
+  is_asset: boolean;
 }
 
-interface PortfolioHolding {
-  id: number;
-  assetType: string;
-  institution: string;
+interface PersonalTransaction {
+  id: string | number;
+  account_id: string | number;
+  account_name?: string;
+  amount: number;
+  currency: string;
+  type: 'income' | 'expense' | 'transfer';
+  date: string;
+  description: string;
+  category: string;
+  reference?: string;
+  import_source: string;
+}
+
+interface PersonalAsset {
+  id: string | number;
   name: string;
-  principal: number;
-  valuation: number;
-  accruedInterest: number;
-  annualYieldPercent: number;
-  maturityDate?: string;
-  isTaxExempt: boolean;
+  category: string;
+  estimated_value: number;
+  currency: string;
+  notes?: string;
 }
 
-interface EtimsInvoice {
-  invoiceId: string;
-  cuin: string;
-  fiscalReceiptNumber: string;
-  invoiceDate: string;
-  taxableAmount: number;
-  vatAmount: number;
-  grandTotal: number;
-  qrCodeUrl: string;
-  vscuStatus: string;
+interface PersonalLiability {
+  id: string | number;
+  name: string;
+  creditor: string;
+  category: string;
+  principal_amount: number;
+  outstanding_balance: number;
+  interest_rate?: number;
+  monthly_payment?: number;
+  currency: string;
+  due_date?: string;
+  notes?: string;
+}
+
+interface PersonalBudget {
+  id: string | number;
+  category: string;
+  monthly_limit: number;
+  currency: string;
+}
+
+interface PersonalSavingsGoal {
+  id: string | number;
+  name: string;
+  target_amount: number;
+  current_amount: number;
+  currency: string;
+  target_date?: string;
+}
+
+interface NetWorthMetrics {
+  netWorth: number;
+  totalAssets: number;
+  liquidCash: number;
+  physicalAssets: number;
+  totalLiabilities: number;
+  debtToAssetRatio: number;
+  monthlyIncome: number;
+  monthlyExpenses: number;
+  netSavings: number;
+  savingsRate: number;
+  isDatabaseConnected?: boolean;
 }
 
 // Format Kenyan Shilling
@@ -84,56 +98,111 @@ const formatKES = (val: number | string) => {
     style: 'currency',
     currency: 'KES',
     minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 0,
   })
     .format(num)
-    .replace('KES', 'KSh');
+    .replace('KES', 'KSh ');
 };
 
+const CATEGORIES_LIST = [
+  'Food & Groceries',
+  'Rent & Housing',
+  'Utilities & Water (KPLC)',
+  'Airtime & Internet (Safaricom)',
+  'Transport & Fuel (Matatu/Petrol)',
+  'Family & Chamas',
+  'Shopping & Essentials',
+  'Healthcare & Pharmacy',
+  'Education & School Fees',
+  'Entertainment & Dining',
+  'Salary & Primary Income',
+  'Side Hustle & Consulting',
+  'Transfers & Remittance',
+  'Savings & MMF Deposit',
+  'Loan & Fuliza Repayment',
+  'Other',
+];
+
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'mpesa' | 'banks' | 'checkout' | 'etims' | 'wealth' | 'advisor'>('overview');
-  const [expenses, setExpenses] = useState<ExpenseCategory[]>([]);
-  const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
-  const [accounts, setAccounts] = useState<DashboardAccount[]>([]);
-  const [holdings, setHoldings] = useState<PortfolioHolding[]>([]);
-  const [etimsInvoices, setEtimsInvoices] = useState<EtimsInvoice[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'accounts' | 'transactions' | 'import' | 'networth' | 'goals'>('overview');
+  const [metrics, setMetrics] = useState<NetWorthMetrics | null>(null);
+  const [accounts, setAccounts] = useState<PersonalAccount[]>([]);
+  const [transactions, setTransactions] = useState<PersonalTransaction[]>([]);
+  const [expenses, setExpenses] = useState<any[]>([]);
+  const [assets, setAssets] = useState<PersonalAsset[]>([]);
+  const [liabilities, setLiabilities] = useState<PersonalLiability[]>([]);
+  const [goals, setGoals] = useState<PersonalSavingsGoal[]>([]);
+  const [budgets, setBudgets] = useState<PersonalBudget[]>([]);
   const [loading, setLoading] = useState(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [railFilter, setRailFilter] = useState('All');
+  const [selectedAccountId, setSelectedAccountId] = useState('All');
 
-  // M-Pesa STK Push Form State
-  const [stkPhone, setStkPhone] = useState('0712345678');
-  const [stkAmount, setStkAmount] = useState('1500');
-  const [stkRef, setStkRef] = useState('Invoice902');
-  const [stkLoading, setStkLoading] = useState(false);
+  // Modals
+  const [showTxModal, setShowTxModal] = useState(false);
+  const [showAccModal, setShowAccModal] = useState(false);
+  const [showAssetModal, setShowAssetModal] = useState(false);
+  const [showLiabModal, setShowLiabModal] = useState(false);
+  const [showGoalModal, setShowGoalModal] = useState(false);
 
-  // Unified Checkout Form State
-  const [checkoutAmount, setCheckoutAmount] = useState('50');
-  const [checkoutCurrency, setCheckoutCurrency] = useState<'USD' | 'KES'>('USD');
-  const [checkoutProvider, setCheckoutProvider] = useState<'paypal' | 'mpesa_express' | 'pesapal'>('paypal');
-  const [checkoutResult, setCheckoutResult] = useState<any>(null);
+  // New Transaction Form State
+  const [newTx, setNewTx] = useState({
+    account_id: '',
+    amount: '',
+    type: 'expense' as 'income' | 'expense' | 'transfer',
+    date: '',
+    description: '',
+    category: 'Food & Groceries',
+    reference: '',
+  });
 
-  // Advisor Chat State
-  const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<Array<{ sender: 'user' | 'advisor'; text: string; tips?: string[] }>>([
-    {
-      sender: 'advisor',
-      text: 'Jambo! I am your Kenyan AI Financial Advisor. I monitor your Safaricom M-Pesa cash flows, direct bank balances (Equity, KCB, Co-op, StanChart), KRA eTIMS tax compliance, and CBK Treasury Bill/Bond yield allocations. How can I guide you today?',
-      tips: [
-        'Ask: "How do I optimize my KRA eTIMS tax liability this month?"',
-        'Ask: "Should I keep funds in M-Pesa, MMF or 91-Day CBK Treasury Bills?"',
-        'Ask: "What is my PayPal USD remittance exposure to KES?"',
-      ],
-    },
-  ]);
-  const [chatLoading, setChatLoading] = useState(false);
+  // New Account Form State
+  const [newAcc, setNewAcc] = useState({
+    name: '',
+    institution: '',
+    account_type: 'mobile_money',
+    currency: 'KES',
+    balance: '',
+  });
+
+  // New Asset Form State
+  const [newAsset, setNewAsset] = useState({
+    name: '',
+    category: 'land',
+    estimated_value: '',
+    notes: '',
+  });
+
+  // New Liability Form State
+  const [newLiab, setNewLiab] = useState({
+    name: '',
+    creditor: '',
+    category: 'personal_loan',
+    principal_amount: '',
+    outstanding_balance: '',
+    interest_rate: '',
+    monthly_payment: '',
+  });
+
+  // New Goal Form State
+  const [newGoal, setNewGoal] = useState({
+    name: '',
+    target_amount: '',
+    current_amount: '',
+    target_date: '',
+  });
+
+  // Import State
+  const [importText, setImportText] = useState('');
+  const [importAccountId, setImportAccountId] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
 
   useEffect(() => {
-    fetchDashboardData();
+    setNewTx((prev) => ({ ...prev, date: new Date().toISOString().split('T')[0] }));
+    loadAllData();
   }, []);
 
   const showToast = (msg: string) => {
@@ -141,1072 +210,1364 @@ export default function Dashboard() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const fetchDashboardData = async () => {
+  const loadAllData = async () => {
     try {
       setLoading(true);
-      const [accRes, txRes, expRes, wealthRes, etimsRes] = await Promise.all([
+      const [netRes, accRes, txRes, expRes, alRes, goalRes] = await Promise.all([
+        fetch('/api/networth'),
         fetch('/api/transactions?type=accounts'),
-        fetch('/api/transactions'),
+        fetch('/api/transactions?limit=200'),
         fetch('/api/expenses/by_category'),
-        fetch('/api/wealth/portfolio'),
-        fetch('/api/compliance/etims'),
+        fetch('/api/assets-liabilities'),
+        fetch('/api/goals'),
       ]);
 
+      if (netRes.ok) {
+        const netData = await netRes.json();
+        setMetrics(netData);
+      }
+      if (accRes.ok) {
+        const accData = await accRes.json();
+        setAccounts(accData.accounts || []);
+        if (accData.accounts?.length > 0 && !importAccountId) {
+          setImportAccountId(String(accData.accounts[0].id));
+          setNewTx((prev) => ({ ...prev, account_id: String(accData.accounts[0].id) }));
+        }
+      }
       if (txRes.ok) {
         const txData = await txRes.json();
         setTransactions(txData.transactions || []);
       }
       if (expRes.ok) {
         const expData = await expRes.json();
-        setExpenses(expData.categories || []);
+        setExpenses(expData.expenses || []);
       }
-      if (wealthRes.ok) {
-        const wData = await wealthRes.json();
-        setHoldings(wData.holdings || []);
+      if (alRes.ok) {
+        const alData = await alRes.json();
+        setAssets(alData.assets || []);
+        setLiabilities(alData.liabilities || []);
       }
-      if (etimsRes.ok) {
-        const etData = await etimsRes.json();
-        setEtimsInvoices(etData.invoices || []);
+      if (goalRes.ok) {
+        const gData = await goalRes.json();
+        setGoals(gData.goals || []);
+        setBudgets(gData.budgets || []);
       }
-
-      // Default mock accounts if not yet saved in DB
-      setAccounts([
-        {
-          id: 1,
-          institution_code: 'SAFARICOM',
-          institution_name: 'M-Pesa Business Till & Paybill',
-          account_number_mask: 'Till: 889021',
-          account_type: 'M-Pesa Paybill / Till',
-          currency: 'KES',
-          balance: 145800.0,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: 2,
-          institution_code: 'EQUITY',
-          institution_name: 'Equity Bank Kenya (Jenga Connect)',
-          account_number_mask: '****4819',
-          account_type: 'Current / Checking',
-          currency: 'KES',
-          balance: 485200.0,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: 3,
-          institution_code: 'KCB',
-          institution_name: 'KCB Bank Kenya (Buni API)',
-          account_number_mask: '****9102',
-          account_type: 'Savings',
-          currency: 'KES',
-          balance: 210000.0,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: 4,
-          institution_code: 'COOP',
-          institution_name: 'Co-operative Bank of Kenya',
-          account_number_mask: '****3321',
-          account_type: 'Current / Checking',
-          currency: 'KES',
-          balance: 95400.0,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: 5,
-          institution_code: 'SCB',
-          institution_name: 'Standard Chartered Kenya',
-          account_number_mask: '****6541',
-          account_type: 'Current / Checking',
-          currency: 'KES',
-          balance: 320000.0,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: 6,
-          institution_code: 'PAYPAL',
-          institution_name: 'PayPal USD Remittance Wallet',
-          account_number_mask: 'wanjiku@paypal.com',
-          account_type: 'PayPal Balance',
-          currency: 'USD',
-          balance: 2450.0,
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      console.error('Error loading dashboard data:', err);
+    } catch (e) {
+      console.error('Failed to load dashboard data:', e);
+      showToast('Error loading financial data');
     } finally {
       setLoading(false);
     }
   };
 
-  // Trigger Daraja STK Push
-  const handleInitiateSTK = async (e: React.FormEvent) => {
+  // Submit Manual Transaction
+  const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStkLoading(true);
+    if (!newTx.amount || !newTx.description || !newTx.account_id) {
+      showToast('Please fill all required fields');
+      return;
+    }
+
     try {
-      const res = await fetch('/api/mpesa/stkpush', {
+      const res = await fetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phoneNumber: stkPhone,
-          amount: parseFloat(stkAmount),
-          accountReference: stkRef,
-          transactionDesc: 'Dashboard Topup',
-        }),
+        body: JSON.stringify(newTx),
       });
 
-      const data = await res.json();
       if (res.ok) {
-        showToast(`📲 STK Push Sent! Prompt delivered to ${stkPhone}.`);
-        // Simulate real-time callback ingestion after 3 seconds
-        setTimeout(async () => {
-          await fetch('/api/mpesa/c2b/confirmation', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              TransactionType: 'CustomerPayBillOnline',
-              TransID: 'RJL' + Math.floor(1000000 + Math.random() * 9000000),
-              TransTime: new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14),
-              TransAmount: parseFloat(stkAmount),
-              BusinessShortCode: '174379',
-              BillRefNumber: stkRef,
-              MSISDN: stkPhone,
-              FirstName: 'Simulated',
-              LastName: 'User',
-            }),
-          });
-          fetchDashboardData();
-          showToast(`✅ M-Pesa Payment Confirmed! Transaction credited in real time.`);
-        }, 3000);
-      } else {
-        showToast(`❌ Error: ${data.error || 'Failed to trigger STK'}`);
-      }
-    } catch (err: any) {
-      showToast(`❌ STK Request Failed: ${err.message}`);
-    } finally {
-      setStkLoading(false);
-    }
-  };
-
-  // Trigger Unified Checkout
-  const handleCreateCheckout = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const res = await fetch('/api/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: parseFloat(checkoutAmount),
-          currency: checkoutCurrency,
-          provider: checkoutProvider,
-          description: 'Personal Remittance / Payment Intent',
-          customerEmail: 'wanjiku@digitalbiz.co.ke',
-        }),
-      });
-      const data = await res.json();
-      setCheckoutResult(data);
-      showToast(`⚡ Checkout Session initialized via ${data.provider.toUpperCase()}`);
-    } catch (err: any) {
-      showToast(`❌ Checkout Error: ${err.message}`);
-    }
-  };
-
-  // Trigger KRA eTIMS Batch Fiscalization
-  const handleFiscalizeAll = async () => {
-    try {
-      const unfiscalized = transactions.filter((t) => t.etims_status === 'UNFISCALIZED');
-      if (unfiscalized.length === 0) {
-        showToast('ℹ️ All commercial transactions are already eTIMS fiscalized!');
-        return;
-      }
-
-      for (const t of unfiscalized) {
-        await fetch('/api/compliance/etims', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            taxpayerKraPin: 'P051234567Z',
-            customerName: t.merchant_or_party,
-            amount: t.currency === 'USD' ? t.amount * 130.5 : t.amount,
-            transactionId: t.id,
-          }),
+        showToast('Transaction added successfully!');
+        setShowTxModal(false);
+        setNewTx({
+          account_id: accounts[0]?.id ? String(accounts[0].id) : '',
+          amount: '',
+          type: 'expense',
+          date: new Date().toISOString().split('T')[0],
+          description: '',
+          category: 'Food & Groceries',
+          reference: '',
         });
+        loadAllData();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to add transaction');
       }
-
-      showToast(`✅ Successfully fiscalized ${unfiscalized.length} transactions with KRA eTIMS!`);
-      fetchDashboardData();
-    } catch (err: any) {
-      showToast(`❌ eTIMS Fiscalization Error: ${err.message}`);
+    } catch {
+      showToast('Error connecting to server');
     }
   };
 
-  // Trigger AI Advisor Chat
-  const handleSendChat = async (e: React.FormEvent) => {
+  // Submit New Account
+  const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim()) return;
-
-    const userText = chatInput;
-    setChatMessages((prev) => [...prev, { sender: 'user', text: userText }]);
-    setChatInput('');
-    setChatLoading(true);
+    if (!newAcc.name) {
+      showToast('Account name is required');
+      return;
+    }
 
     try {
-      const res = await fetch('/api/advisor/chat', {
+      const res = await fetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userText }),
+        body: JSON.stringify({
+          type: 'new_account',
+          ...newAcc,
+          balance: parseFloat(newAcc.balance || '0'),
+        }),
       });
+
+      if (res.ok) {
+        showToast('Account created successfully!');
+        setShowAccModal(false);
+        setNewAcc({ name: '', institution: '', account_type: 'mobile_money', currency: 'KES', balance: '' });
+        loadAllData();
+      }
+    } catch {
+      showToast('Failed to create account');
+    }
+  };
+
+  // Submit New Asset
+  const handleCreateAsset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAsset.name || !newAsset.estimated_value) {
+      showToast('Please enter asset name and valuation');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/assets-liabilities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'asset',
+          ...newAsset,
+          estimated_value: parseFloat(newAsset.estimated_value),
+        }),
+      });
+
+      if (res.ok) {
+        showToast('Asset added to balance sheet!');
+        setShowAssetModal(false);
+        setNewAsset({ name: '', category: 'land', estimated_value: '', notes: '' });
+        loadAllData();
+      }
+    } catch {
+      showToast('Failed to save asset');
+    }
+  };
+
+  // Submit New Liability
+  const handleCreateLiability = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newLiab.name || !newLiab.outstanding_balance) {
+      showToast('Please enter liability details');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/assets-liabilities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'liability',
+          ...newLiab,
+          principal_amount: parseFloat(newLiab.principal_amount || newLiab.outstanding_balance),
+          outstanding_balance: parseFloat(newLiab.outstanding_balance),
+          interest_rate: newLiab.interest_rate ? parseFloat(newLiab.interest_rate) : undefined,
+          monthly_payment: newLiab.monthly_payment ? parseFloat(newLiab.monthly_payment) : undefined,
+        }),
+      });
+
+      if (res.ok) {
+        showToast('Liability recorded on balance sheet!');
+        setShowLiabModal(false);
+        setNewLiab({ name: '', creditor: '', category: 'personal_loan', principal_amount: '', outstanding_balance: '', interest_rate: '', monthly_payment: '' });
+        loadAllData();
+      }
+    } catch {
+      showToast('Failed to record liability');
+    }
+  };
+
+  // Submit New Goal
+  const handleCreateGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newGoal.name || !newGoal.target_amount) {
+      showToast('Please enter goal name and target amount');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...newGoal,
+          target_amount: parseFloat(newGoal.target_amount),
+          current_amount: parseFloat(newGoal.current_amount || '0'),
+        }),
+      });
+
+      if (res.ok) {
+        showToast('Savings goal created!');
+        setShowGoalModal(false);
+        setNewGoal({ name: '', target_amount: '', current_amount: '', target_date: '' });
+        loadAllData();
+      }
+    } catch {
+      showToast('Failed to save goal');
+    }
+  };
+
+  // Contribute to Goal
+  const handleContributeGoal = async (id: string | number, amount: number) => {
+    try {
+      const res = await fetch('/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'contribute', id, amount }),
+      });
+      if (res.ok) {
+        showToast(`Contributed ${formatKES(amount)} to goal!`);
+        loadAllData();
+      }
+    } catch {
+      showToast('Failed to update goal');
+    }
+  };
+
+  // Import Statement / SMS
+  const handleImportStatement = async (sampleType?: 'sms' | 'csv') => {
+    let textToUse = importText;
+
+    if (sampleType === 'sms') {
+      textToUse = `QHL921KK89 Confirmed. Ksh3,200.00 sent to NAIVAS WESTLANDS on 22/10/26 at 11:45 AM. New M-PESA balance is Ksh42,850.00.
+QHL483JJ22 Confirmed. Ksh1,500.00 paid to KPLC PREPAID.
+QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10/26.`;
+      setImportText(textToUse);
+    } else if (sampleType === 'csv') {
+      textToUse = `"Receipt No.","Completion Time","Details","Transaction Status","Paid In","Withdrawn","Balance"
+"RJL902KL11","2026-10-21 09:30:12","Naivas Supermarket Food","Completed","0.00","4200.00","38650.00"
+"RJL482PQ99","2026-10-20 18:14:05","Kenya Power KPLC Tokens","Completed","0.00","2000.00","42850.00"
+"RJL110AZ77","2026-10-19 14:00:00","Consulting Retainer Inflow","Completed","50000.00","0.00","44850.00"`;
+      setImportText(textToUse);
+    }
+
+    if (!textToUse.trim()) {
+      showToast('Please paste statement rows or SMS messages');
+      return;
+    }
+
+    try {
+      setImportLoading(true);
+      const res = await fetch('/api/import/statement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rawText: textToUse,
+          accountId: importAccountId || (accounts[0] ? accounts[0].id : 1),
+          importType: sampleType === 'sms' ? 'sms' : 'statement',
+        }),
+      });
+
       const data = await res.json();
       if (res.ok) {
-        setChatMessages((prev) => [
-          ...prev,
-          {
-            sender: 'advisor',
-            text: `${data.analysis}\n\n${data.recommendations?.join('\n') || ''}`,
-            tips: data.tips,
-          },
-        ]);
+        showToast(`Successfully imported ${data.count} transactions into ${data.accountName}!`);
+        setImportText('');
+        loadAllData();
       } else {
-        setChatMessages((prev) => [
-          ...prev,
-          { sender: 'advisor', text: 'Error connecting to Simba Advisory service. Please try again.' },
-        ]);
+        showToast(data.error || 'Failed to parse transactions');
       }
-    } catch (err: any) {
-      setChatMessages((prev) => [
-        ...prev,
-        { sender: 'advisor', text: `Failed to fetch advice: ${err.message}` },
-      ]);
+    } catch {
+      showToast('Import request error');
     } finally {
-      setChatLoading(false);
+      setImportLoading(false);
     }
   };
 
-  // Direct Bank Sync simulation
-  const handleSyncBank = async (bankCode: string) => {
-    showToast(`🔄 Pulling live statements from ${bankCode}...`);
-    try {
-      const res = await fetch('/api/banks/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bankCode, accountMask: '****9988' }),
-      });
-      if (res.ok) {
-        showToast(`✅ Live statements & balances synced from ${bankCode}!`);
-        fetchDashboardData();
-      }
-    } catch (err: any) {
-      showToast(`❌ Bank Sync Error: ${err.message}`);
-    }
-  };
-
-  // Filter transactions
+  // Filtered Transactions
   const filteredTransactions = useMemo(() => {
     return transactions.filter((t) => {
-      const matchesSearch =
-        t.merchant_or_party.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.rail_reference.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.category.toLowerCase().includes(searchQuery.toLowerCase());
-
-      const matchesCat = selectedCategory === 'All' || t.category === selectedCategory;
-      const matchesRail = railFilter === 'All' || t.source_rail === railFilter;
-
-      return matchesSearch && matchesCat && matchesRail;
+      const matchCat = selectedCategory === 'All' || t.category.toLowerCase() === selectedCategory.toLowerCase();
+      const matchAcc = selectedAccountId === 'All' || String(t.account_id) === String(selectedAccountId);
+      const matchQuery =
+        !searchQuery ||
+        t.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        t.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (t.reference && t.reference.toLowerCase().includes(searchQuery.toLowerCase()));
+      return matchCat && matchAcc && matchQuery;
     });
-  }, [transactions, searchQuery, selectedCategory, railFilter]);
-
-  // Aggregate stats
-  const totalBalanceKes = useMemo(() => {
-    return accounts.reduce((acc, a) => {
-      const val = a.currency === 'USD' ? a.balance * 130.5 : a.balance;
-      return acc + val;
-    }, 0);
-  }, [accounts]);
-
-  const totalInvestedKes = useMemo(() => {
-    return holdings.reduce((sum, h) => sum + h.valuation, 0);
-  }, [holdings]);
+  }, [transactions, selectedCategory, selectedAccountId, searchQuery]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-[#0A0D14] text-slate-100 flex flex-col font-sans selection:bg-emerald-500/30">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 bg-emerald-600 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-emerald-400/40 animate-bounce">
-          <span className="text-xl">🔔</span>
-          <span className="font-semibold text-sm">{toastMessage}</span>
+        <div className="fixed bottom-6 right-6 z-50 bg-emerald-500 text-slate-950 px-5 py-3 rounded-xl font-medium shadow-2xl flex items-center gap-3 animate-bounce">
+          <span>✓</span> {toastMessage}
         </div>
       )}
 
-      {/* Top Navigation */}
-      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-40 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-green-600 flex items-center justify-center text-xl shadow-lg shadow-emerald-500/20 font-bold text-white">
-            🇰🇪
+      {/* Header */}
+      <header className="border-b border-slate-800/80 bg-[#0F1420]/80 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-xl shadow-lg shadow-emerald-900/30">
+              🇰🇪
+            </div>
+            <div>
+              <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                HisaKenya <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">MVP Personal Wealth</span>
+              </h1>
+              <p className="text-xs text-slate-400">Personal Net Worth, M-Pesa & Cash Flow Tracker</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              Kenya Unified Financial Dashboard
-              <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                Native Rails
+
+          <div className="flex items-center gap-3">
+            {metrics?.isDatabaseConnected ? (
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                PostgreSQL Connected
               </span>
-            </h1>
-            <p className="text-xs text-slate-400">
-              Safaricom Daraja 2.0 • Direct Bank Gateways • PayPal • KRA eTIMS • CBK Wealth
-            </p>
+            ) : (
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-950/60 text-amber-300 border border-amber-800/80">
+                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                In-Memory Session Mode
+              </span>
+            )}
+
+            <button
+              id="btn-add-tx"
+              onClick={() => setShowTxModal(true)}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg transition-all shadow-lg shadow-emerald-950 flex items-center gap-1.5"
+            >
+              <span>+</span> Add Transaction
+            </button>
           </div>
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="flex items-center gap-1 bg-slate-800/80 p-1.5 rounded-xl border border-slate-700/60 overflow-x-auto text-sm">
-          <button
-            onClick={() => setActiveTab('overview')}
-            className={`px-3.5 py-1.5 rounded-lg font-medium transition ${
-              activeTab === 'overview' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            📊 Overview
-          </button>
-          <button
-            onClick={() => setActiveTab('mpesa')}
-            className={`px-3.5 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
-              activeTab === 'mpesa' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            M-Pesa Daraja
-          </button>
-          <button
-            onClick={() => setActiveTab('banks')}
-            className={`px-3.5 py-1.5 rounded-lg font-medium transition ${
-              activeTab === 'banks' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            🏦 Direct Banks
-          </button>
-          <button
-            onClick={() => setActiveTab('checkout')}
-            className={`px-3.5 py-1.5 rounded-lg font-medium transition ${
-              activeTab === 'checkout' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            💳 Checkout & PayPal
-          </button>
-          <button
-            onClick={() => setActiveTab('etims')}
-            className={`px-3.5 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
-              activeTab === 'etims' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            🏛️ KRA eTIMS
-          </button>
-          <button
-            onClick={() => setActiveTab('wealth')}
-            className={`px-3.5 py-1.5 rounded-lg font-medium transition ${
-              activeTab === 'wealth' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            📈 Wealth & Bonds
-          </button>
-          <button
-            onClick={() => setActiveTab('advisor')}
-            className={`px-3.5 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
-              activeTab === 'advisor' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            🤖 AI Advisor
-          </button>
-        </nav>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 border-t border-slate-800/50 overflow-x-auto scrollbar-none">
+          {[
+            { id: 'overview', label: 'Overview & Net Worth', icon: '📊' },
+            { id: 'accounts', label: 'Accounts & Wallets', icon: '💳' },
+            { id: 'transactions', label: 'Transactions', icon: '📝' },
+            { id: 'import', label: 'M-Pesa / CSV Import', icon: '📥' },
+            { id: 'networth', label: 'Assets & Debts', icon: '⚖️' },
+            { id: 'goals', label: 'Budgets & Goals', icon: '🎯' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`py-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                activeTab === tab.id
+                  ? 'border-emerald-500 text-emerald-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
+              }`}
+            >
+              <span>{tab.icon}</span>
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 p-6 max-w-7xl w-full mx-auto space-y-6">
-        {/* KPI Header Bar */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-xl pointer-events-none"></div>
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Liquid Cash</p>
-            <h2 className="text-2xl font-bold text-white mt-1">{formatKES(totalBalanceKes)}</h2>
-            <p className="text-xs text-emerald-400 mt-2 flex items-center gap-1">
-              <span>●</span> 6 Accounts Active (M-Pesa, Banks, PayPal)
-            </p>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {loading ? (
+          <div className="h-96 flex flex-col items-center justify-center gap-4 text-slate-400">
+            <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-sm font-medium">Calculating personal wealth balance sheet...</p>
           </div>
+        ) : (
+          <>
+            {/* TAB 1: OVERVIEW & NET WORTH */}
+            {activeTab === 'overview' && (
+              <div className="space-y-6">
+                {/* Net Worth Hero Banner */}
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                  <div className="lg:col-span-2 bg-gradient-to-br from-emerald-950/40 via-[#0F172A] to-[#0A0D14] border border-emerald-500/20 rounded-2xl p-6 relative overflow-hidden shadow-xl">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl -z-10"></div>
+                    <p className="text-xs uppercase tracking-wider font-semibold text-emerald-400">Real-Time Net Worth</p>
+                    <h2 className="text-3xl sm:text-4xl font-extrabold text-white mt-2 tracking-tight">
+                      {formatKES(metrics?.netWorth || 0)}
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">Total Assets minus Total Outstanding Liabilities</p>
 
-          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/10 rounded-full blur-xl pointer-events-none"></div>
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">CBK Wealth & Investments</p>
-            <h2 className="text-2xl font-bold text-white mt-1">{formatKES(totalInvestedKes)}</h2>
-            <p className="text-xs text-blue-400 mt-2 flex items-center gap-1">
-              <span>●</span> Weighted Yield ~15.2% (T-Bills & IFB)
-            </p>
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-full blur-xl pointer-events-none"></div>
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">M-Pesa Inflow (30d)</p>
-            <h2 className="text-2xl font-bold text-white mt-1">{formatKES(145800)}</h2>
-            <p className="text-xs text-purple-400 mt-2 flex items-center gap-1">
-              <span>●</span> Daraja Real-time C2B Push
-            </p>
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/10 rounded-full blur-xl pointer-events-none"></div>
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">KRA eTIMS Fiscal Status</p>
-            <h2 className="text-2xl font-bold text-white mt-1">
-              {transactions.filter((t) => t.etims_status === 'FISCALIZED').length} / {transactions.length}
-            </h2>
-            <p className="text-xs text-amber-400 mt-2 flex items-center gap-1">
-              <span>●</span> VSCU / OSCU Compliant
-            </p>
-          </div>
-        </div>
-
-        {/* TAB 1: OVERVIEW */}
-        {activeTab === 'overview' && (
-          <div className="space-y-6">
-            {/* Account Rails Grid */}
-            <div>
-              <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
-                <span>🏦</span> Connected Financial Rails (Kenya Native)
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                {accounts.map((acc) => (
-                  <div
-                    key={acc.id}
-                    className="bg-slate-900/90 border border-slate-800 p-4 rounded-xl hover:border-emerald-500/40 transition"
-                  >
-                    <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                      <span className="font-semibold text-emerald-400">{acc.institution_code}</span>
-                      <span>{acc.currency}</span>
-                    </div>
-                    <div className="text-sm font-medium text-white truncate">{acc.institution_name}</div>
-                    <div className="text-xs text-slate-500 mb-2">{acc.account_number_mask}</div>
-                    <div className="text-base font-bold text-slate-100">
-                      {acc.currency === 'USD' ? `$${acc.balance.toLocaleString()}` : formatKES(acc.balance)}
+                    <div className="grid grid-cols-3 gap-2 mt-6 pt-5 border-t border-slate-800">
+                      <div>
+                        <span className="text-[11px] text-slate-400 block">Total Assets</span>
+                        <span className="text-sm font-semibold text-emerald-400">{formatKES(metrics?.totalAssets || 0)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-400 block">Total Liabilities</span>
+                        <span className="text-sm font-semibold text-rose-400">{formatKES(metrics?.totalLiabilities || 0)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-400 block">Debt-to-Asset</span>
+                        <span className="text-sm font-semibold text-amber-400">
+                          {(metrics?.debtToAssetRatio || 0).toFixed(1)}%
+                        </span>
+                      </div>
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
 
-            {/* Charts Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Category Breakdown */}
-              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl lg:col-span-1">
-                <h3 className="text-base font-bold text-white mb-1">Spending by Category</h3>
-                <p className="text-xs text-slate-400 mb-4">Intelligently categorized for Kenyan merchants</p>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={expenses}
-                        dataKey="total_amount"
-                        nameKey="category"
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={55}
-                        outerRadius={80}
-                        paddingAngle={4}
-                      >
-                        {expenses.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(val: any) => [formatKES(val), 'Spent']}
-                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px' }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="space-y-1.5 mt-2 max-h-40 overflow-y-auto text-xs">
-                  {expenses.map((e) => (
-                    <div key={e.category} className="flex items-center justify-between py-1 border-b border-slate-800/60">
-                      <div className="flex items-center gap-2 truncate">
-                        <span>{e.icon}</span>
-                        <span className="text-slate-300 truncate">{e.category}</span>
+                  {/* Cash Flow Summary */}
+                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-wider font-semibold text-slate-400">Monthly Cash Inflow</p>
+                      <h3 className="text-2xl font-bold text-white mt-1">{formatKES(metrics?.monthlyIncome || 0)}</h3>
+                      <p className="text-xs text-slate-400 mt-1">Salary & Business Inflows</p>
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t border-slate-800">
+                      <p className="text-xs uppercase tracking-wider font-semibold text-slate-400">Monthly Expenses</p>
+                      <h3 className="text-xl font-bold text-rose-400 mt-1">{formatKES(metrics?.monthlyExpenses || 0)}</h3>
+                      <div className="flex items-center justify-between text-xs text-slate-400 mt-2">
+                        <span>Net Savings:</span>
+                        <span className="font-semibold text-emerald-400">{formatKES(metrics?.netSavings || 0)}</span>
                       </div>
-                      <span className="font-semibold text-white">{formatKES(e.total_amount)}</span>
+                    </div>
+                  </div>
+
+                  {/* Savings Rate Card */}
+                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-wider font-semibold text-slate-400">Personal Savings Rate</p>
+                      <div className="flex items-baseline gap-2 mt-2">
+                        <span className="text-4xl font-extrabold text-teal-400">
+                          {(metrics?.savingsRate || 0).toFixed(0)}%
+                        </span>
+                        <span className="text-xs text-slate-400">of income saved</span>
+                      </div>
+
+                      <div className="w-full bg-slate-800 h-2.5 rounded-full mt-4 overflow-hidden">
+                        <div
+                          className="bg-gradient-to-r from-teal-500 to-emerald-400 h-full rounded-full"
+                          style={{ width: `${Math.min(100, Math.max(0, metrics?.savingsRate || 0))}%` }}
+                        ></div>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-slate-400 pt-4 border-t border-slate-800">
+                      <span>💡 </span>
+                      {(metrics?.savingsRate || 0) >= 30
+                        ? 'Superb savings velocity! Maintain KES cash in high-yield MMFs.'
+                        : 'Aim for a 30% savings rate to accelerate debt freedom & land acquisitions.'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Charts Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Expense Breakdown Donut */}
+                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5">
+                    <h3 className="text-sm font-bold text-white mb-4 flex items-center justify-between">
+                      <span>Kenyan Expense Category Breakdown</span>
+                      <span className="text-xs text-slate-400">{expenses.length} Categories</span>
+                    </h3>
+                    <div className="h-64">
+                      {expenses.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={expenses}
+                              dataKey="total_amount"
+                              nameKey="category"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={60}
+                              outerRadius={85}
+                              paddingAngle={4}
+                            >
+                              {expenses.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.color || '#10B981'} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              formatter={(value: any) => [formatKES(value), 'Spent']}
+                              contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', borderRadius: '8px' }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="h-full flex items-center justify-center text-xs text-slate-500">
+                          No expense transactions recorded yet
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Category Legend Chips */}
+                    <div className="flex flex-wrap gap-2 mt-4 max-h-24 overflow-y-auto pr-1">
+                      {expenses.map((c) => (
+                        <span
+                          key={c.category}
+                          className="text-xs px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 flex items-center gap-1.5"
+                        >
+                          <span>{c.icon}</span>
+                          <span>{c.category}:</span>
+                          <span className="font-semibold text-white">{formatKES(c.total_amount)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Liquid Cash & Bank Allocation */}
+                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-bold text-white">Liquid Balances by Account</h3>
+                      <button
+                        onClick={() => setActiveTab('accounts')}
+                        className="text-xs text-emerald-400 hover:underline"
+                      >
+                        Manage Accounts →
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {accounts.map((acc) => (
+                        <div
+                          key={acc.id}
+                          className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-lg bg-slate-800 flex items-center justify-center text-lg">
+                              {acc.account_type === 'mobile_money'
+                                ? '📱'
+                                : acc.account_type === 'sacco'
+                                ? '🤝'
+                                : acc.account_type === 'investment'
+                                ? '📈'
+                                : '🏦'}
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-white">{acc.name}</p>
+                              <p className="text-xs text-slate-400">{acc.institution || acc.account_type}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-bold text-emerald-400">{formatKES(acc.balance)}</p>
+                            <span className="text-[10px] text-slate-500 uppercase">{acc.currency}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: ACCOUNTS & WALLETS */}
+            {activeTab === 'accounts' && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Personal Accounts & Wallets</h2>
+                    <p className="text-xs text-slate-400">Track M-Pesa, Bank Accounts, SACCO shares, and Money Market Funds</p>
+                  </div>
+                  <button
+                    onClick={() => setShowAccModal(true)}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 self-start"
+                  >
+                    <span>+</span> Add New Account
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {accounts.map((acc) => (
+                    <div
+                      key={acc.id}
+                      className="bg-[#111726] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between hover:border-slate-700 transition-all shadow-sm"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-2xl">
+                            {acc.account_type === 'mobile_money'
+                              ? '📱'
+                              : acc.account_type === 'sacco'
+                              ? '🤝'
+                              : acc.account_type === 'investment'
+                              ? '📈'
+                              : '🏦'}
+                          </span>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
+                            {acc.currency}
+                          </span>
+                        </div>
+                        <h3 className="text-base font-bold text-white mt-3">{acc.name}</h3>
+                        <p className="text-xs text-slate-400">{acc.institution}</p>
+                      </div>
+
+                      <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between">
+                        <span className="text-xs text-slate-400">Balance:</span>
+                        <span className="text-lg font-extrabold text-emerald-400">{formatKES(acc.balance)}</span>
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
+            )}
 
-              {/* Transactions Feed */}
-              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl lg:col-span-2 flex flex-col">
-                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            {/* TAB 3: TRANSACTIONS & CASH FLOW */}
+            {activeTab === 'transactions' && (
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
-                    <h3 className="text-base font-bold text-white">Unified Transactions Feed</h3>
-                    <p className="text-xs text-slate-400">Live feed across M-Pesa, Equity, KCB, Co-op & PayPal</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      placeholder="Search transactions..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="bg-slate-800 text-xs px-3 py-1.5 rounded-lg border border-slate-700 focus:outline-none focus:border-emerald-500 text-white"
-                    />
-                    <select
-                      value={railFilter}
-                      onChange={(e) => setRailFilter(e.target.value)}
-                      className="bg-slate-800 text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 text-white"
-                    >
-                      <option value="All">All Rails</option>
-                      <option value="MPESA_DARAJA">M-Pesa</option>
-                      <option value="EQUITY_JENGA">Equity Jenga</option>
-                      <option value="KCB_BUNI">KCB Buni</option>
-                      <option value="PAYPAL">PayPal</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-400">
-                        <th className="pb-2">Date / Ref</th>
-                        <th className="pb-2">Rail</th>
-                        <th className="pb-2">Merchant / Party</th>
-                        <th className="pb-2">Category</th>
-                        <th className="pb-2 text-right">Amount</th>
-                        <th className="pb-2 text-center">eTIMS Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60">
-                      {filteredTransactions.map((tx) => (
-                        <tr key={tx.id} className="hover:bg-slate-800/40 transition">
-                          <td className="py-2.5">
-                            <div className="font-semibold text-white">{tx.date}</div>
-                            <div className="text-[10px] text-slate-500 font-mono">{tx.rail_reference}</div>
-                          </td>
-                          <td className="py-2.5">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-emerald-400 border border-slate-700">
-                              {tx.source_rail.replace('_', ' ')}
-                            </span>
-                          </td>
-                          <td className="py-2.5">
-                            <div className="text-slate-200 font-medium">{tx.merchant_or_party}</div>
-                            <div className="text-[10px] text-slate-500">{tx.payment_channel}</div>
-                          </td>
-                          <td className="py-2.5 text-slate-300">{tx.category}</td>
-                          <td
-                            className={`py-2.5 text-right font-bold ${
-                              tx.type === 'credit' ? 'text-emerald-400' : 'text-slate-200'
-                            }`}
-                          >
-                            {tx.type === 'credit' ? '+' : '-'}
-                            {tx.currency === 'USD' ? `$${tx.amount.toFixed(2)}` : formatKES(tx.amount)}
-                          </td>
-                          <td className="py-2.5 text-center">
-                            {tx.etims_status === 'FISCALIZED' ? (
-                              <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">
-                                ✓ Fiscalized
-                              </span>
-                            ) : tx.etims_status === 'EXEMPT' ? (
-                              <span className="text-[10px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full font-mono">
-                                Exempt
-                              </span>
-                            ) : (
-                              <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full font-mono">
-                                Pending Sync
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 2: SAFARICOM M-PESA DARAJA 2.0 */}
-        {activeTab === 'mpesa' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl font-bold">
-                  📲
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-white">Lipa Na M-Pesa Online (STK Push)</h3>
-                  <p className="text-xs text-slate-400">Trigger real-time STK prompts directly to phone</p>
-                </div>
-              </div>
-
-              <form onSubmit={handleInitiateSTK} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Customer Phone Number (Safaricom)
-                  </label>
-                  <input
-                    type="text"
-                    value={stkPhone}
-                    onChange={(e) => setStkPhone(e.target.value)}
-                    placeholder="2547XXXXXXXX or 07XXXXXXXX"
-                    className="w-full bg-slate-800 text-sm px-4 py-2.5 rounded-xl border border-slate-700 text-white focus:outline-none focus:border-emerald-500"
-                    required
-                  />
-                  <span className="text-[10px] text-slate-500">Supports standard Kenyan formats (07XX / 01XX / 2547XX)</span>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Amount (KES)</label>
-                  <input
-                    type="number"
-                    value={stkAmount}
-                    onChange={(e) => setStkAmount(e.target.value)}
-                    placeholder="Amount in KES"
-                    className="w-full bg-slate-800 text-sm px-4 py-2.5 rounded-xl border border-slate-700 text-white focus:outline-none focus:border-emerald-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Account Reference / Bill Number</label>
-                  <input
-                    type="text"
-                    value={stkRef}
-                    onChange={(e) => setStkRef(e.target.value)}
-                    placeholder="e.g. Inv001"
-                    className="w-full bg-slate-800 text-sm px-4 py-2.5 rounded-xl border border-slate-700 text-white focus:outline-none focus:border-emerald-500"
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={stkLoading}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30"
-                >
-                  {stkLoading ? (
-                    <span>Sending Prompt to Handset...</span>
-                  ) : (
-                    <>
-                      <span>📱</span> Send M-Pesa STK Push
-                    </>
-                  )}
-                </button>
-              </form>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                  <span>⚡</span> Daraja 2.0 Webhook Architecture
-                </h3>
-                <p className="text-xs text-slate-400 mb-4">
-                  Endpoints actively listening for Safaricom IPN callbacks:
-                </p>
-                <div className="space-y-3">
-                  <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-bold text-emerald-400">STK Push Callback Receiver</span>
-                      <span className="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-slate-300">POST</span>
-                    </div>
-                    <code className="text-[11px] text-slate-300">/api/mpesa/callback</code>
-                  </div>
-
-                  <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-bold text-emerald-400">C2B Instant Confirmation Endpoint</span>
-                      <span className="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-slate-300">POST</span>
-                    </div>
-                    <code className="text-[11px] text-slate-300">/api/mpesa/c2b/confirmation</code>
-                  </div>
-
-                  <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-bold text-emerald-400">C2B Real-time Validation Gate</span>
-                      <span className="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-slate-300">POST</span>
-                    </div>
-                    <code className="text-[11px] text-slate-300">/api/mpesa/c2b/validation</code>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-6 p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300">
-                💡 <strong>Why M-Pesa Daraja:</strong> Safaricom processes over 90% of local peer-to-peer and merchant payments. Real-time C2B callbacks eliminate end-of-day statement reconciliation delays!
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 3: DIRECT KENYAN BANKS */}
-        {activeTab === 'banks' && (
-          <div className="space-y-6">
-            <div>
-              <h3 className="text-lg font-bold text-white mb-2">Kenyan Direct Banking Gateway</h3>
-              <p className="text-xs text-slate-400">Direct API integration via Open Banking & Pesalink switch</p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {[
-                {
-                  code: 'EQUITY_KE',
-                  name: 'Equity Bank Kenya',
-                  api: 'Jenga API v3 (Finserve)',
-                  desc: 'Account Inquiry, Mini-Statements, Pesalink Transfers, EazzyPay',
-                  color: 'border-red-500/40 bg-red-950/10',
-                  badge: 'bg-red-500/20 text-red-400',
-                },
-                {
-                  code: 'KCB_KE',
-                  name: 'KCB Bank Kenya',
-                  api: 'KCB Buni Open Banking',
-                  desc: 'Real-time statement feeds, balance inquiries, and direct bank transfers',
-                  color: 'border-green-500/40 bg-green-950/10',
-                  badge: 'bg-green-500/20 text-green-400',
-                },
-                {
-                  code: 'COOP_KE',
-                  name: 'Co-operative Bank',
-                  api: 'Co-op Open Banking Portal',
-                  desc: 'MCo-op Cash sync, Pesalink switches, and internal corporate transfers',
-                  color: 'border-emerald-500/40 bg-emerald-950/10',
-                  badge: 'bg-emerald-500/20 text-emerald-400',
-                },
-                {
-                  code: 'SCB_KE',
-                  name: 'Standard Chartered',
-                  api: 'Straight2Bank (S2B) API',
-                  desc: 'Corporate RTGS, multi-currency accounts, and automated FX treasury',
-                  color: 'border-blue-500/40 bg-blue-950/10',
-                  badge: 'bg-blue-500/20 text-blue-400',
-                },
-              ].map((bank) => (
-                <div key={bank.code} className={`p-5 rounded-2xl border ${bank.color} flex flex-col justify-between`}>
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${bank.badge}`}>
-                        {bank.api}
-                      </span>
-                      <span className="text-xs text-emerald-400 flex items-center gap-1">● Live</span>
-                    </div>
-                    <h4 className="font-bold text-white text-base mb-1">{bank.name}</h4>
-                    <p className="text-xs text-slate-400 mb-4">{bank.desc}</p>
+                    <h2 className="text-lg font-bold text-white">Transactions History</h2>
+                    <p className="text-xs text-slate-400">All inflows, expenses, and savings transfers</p>
                   </div>
                   <button
-                    onClick={() => handleSyncBank(bank.code)}
-                    className="w-full bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 rounded-xl transition border border-slate-700 flex items-center justify-center gap-1.5"
+                    onClick={() => setShowTxModal(true)}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 self-start"
                   >
-                    <span>🔄</span> Pull Live Statements
+                    <span>+</span> Record Transaction
                   </button>
                 </div>
-              ))}
-            </div>
 
-            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-              <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
-                <span>🔄</span> Pesalink Real-Time Interbank Rail Status
-              </h4>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Pesalink provides instant 24/7 bank-to-bank switching under the Kenya Bankers Association (KBA) and Central Bank of Kenya. Transfers between Equity, KCB, Co-op, and Standard Chartered clear within 5 seconds without manual intervention.
-              </p>
-            </div>
-          </div>
-        )}
+                {/* Filters */}
+                <div className="bg-[#111726] border border-slate-800 rounded-xl p-3 flex flex-wrap gap-3 items-center">
+                  <input
+                    type="text"
+                    placeholder="Search by description or reference..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="flex-1 min-w-[200px] bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                  />
 
-        {/* TAB 4: UNIFIED CHECKOUT & PAYPAL */}
-        {activeTab === 'checkout' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
-              <h3 className="text-lg font-bold text-white mb-1">Unified Checkout & Remittance</h3>
-              <p className="text-xs text-slate-400 mb-4">
-                Receive PayPal USD remittances or card payments settled directly into KES
-              </p>
-
-              <form onSubmit={handleCreateCheckout} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Payment Provider / Rail</label>
                   <select
-                    value={checkoutProvider}
-                    onChange={(e: any) => setCheckoutProvider(e.target.value)}
-                    className="w-full bg-slate-800 text-sm px-4 py-2.5 rounded-xl border border-slate-700 text-white focus:outline-none focus:border-emerald-500"
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none"
                   >
-                    <option value="paypal">PayPal (Orders v2 / International USD)</option>
-                    <option value="mpesa_express">M-Pesa Express (Local Mobile Money)</option>
-                    <option value="pesapal">Pesapal (Visa / Mastercard / Amex Aggregator)</option>
+                    <option value="All">All Categories</option>
+                    {CATEGORIES_LIST.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={selectedAccountId}
+                    onChange={(e) => setSelectedAccountId(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none"
+                  >
+                    <option value="All">All Accounts</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={String(a.id)}>{a.name}</option>
+                    ))}
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Amount</label>
-                    <input
-                      type="number"
-                      value={checkoutAmount}
-                      onChange={(e) => setCheckoutAmount(e.target.value)}
-                      className="w-full bg-slate-800 text-sm px-4 py-2.5 rounded-xl border border-slate-700 text-white focus:outline-none focus:border-emerald-500"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Currency</label>
-                    <select
-                      value={checkoutCurrency}
-                      onChange={(e: any) => setCheckoutCurrency(e.target.value)}
-                      className="w-full bg-slate-800 text-sm px-4 py-2.5 rounded-xl border border-slate-700 text-white focus:outline-none focus:border-emerald-500"
-                    >
-                      <option value="USD">USD ($)</option>
-                      <option value="KES">KES (KSh)</option>
-                    </select>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30"
-                >
-                  <span>⚡</span> Initialize Unified Checkout
-                </button>
-              </form>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-between">
-              {checkoutResult ? (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-400">Order ID:</span>
-                    <span className="text-xs font-mono text-emerald-400">{checkoutResult.orderId}</span>
-                  </div>
-                  <div className="bg-slate-800 p-4 rounded-xl space-y-2 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Gross Amount:</span>
-                      <span className="font-bold text-white">
-                        {checkoutResult.currency} {checkoutResult.amount}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Settled KES:</span>
-                      <span className="font-bold text-emerald-400">
-                        {formatKES(checkoutResult.settledAmountKes)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">FX Conversion Rate:</span>
-                      <span className="font-mono text-slate-300">1 USD = {checkoutResult.fxRate} KES</span>
-                    </div>
-                  </div>
-                  <p className="text-xs text-slate-300 leading-relaxed">{checkoutResult.checkoutInstructions}</p>
-                  {checkoutResult.paymentUrl && (
-                    <a
-                      href={checkoutResult.paymentUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-block w-full text-center bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold py-2.5 rounded-xl border border-emerald-500/30 text-xs"
-                    >
-                      Simulate Provider Approval Gateway ↗
-                    </a>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center py-10 text-slate-500 text-xs">
-                  Fill out the checkout form to preview the unified aggregator intent and live FX conversion.
-                </div>
-              )}
-
-              <div className="mt-4 p-3 rounded-xl bg-slate-800/60 border border-slate-700 text-xs text-slate-400">
-                💰 <strong>Freelance & Upwork Ready:</strong> Ideal for Kenyan software engineers, writers, and digital agencies receiving payments via PayPal or Stripe, settling into Kenyan commercial banks.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 5: KRA eTIMS TAX COMPLIANCE */}
-        {activeTab === 'etims' && (
-          <div className="space-y-6">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h3 className="text-lg font-bold text-white">KRA eTIMS Fiscal Compliance & Accounting Sync</h3>
-                <p className="text-xs text-slate-400">
-                  Virtual Sales Control Unit (VSCU) & Online Sales Control Unit (OSCU) sync
-                </p>
-              </div>
-              <button
-                onClick={handleFiscalizeAll}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition flex items-center gap-2 shadow-lg shadow-emerald-600/30"
-              >
-                <span>📜</span> 1-Click Batch Fiscalize Inflows
-              </button>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-              <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                <span className="text-xs font-bold text-white">Fiscal Invoices Issued with KRA CUIN</span>
-                <span className="text-xs text-slate-400">{etimsInvoices.length} Registered</span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-800 text-slate-400 bg-slate-950/40">
-                      <th className="p-3">CUIN (Control Unit Invoice #)</th>
-                      <th className="p-3">Date</th>
-                      <th className="p-3 text-right">Taxable Amount</th>
-                      <th className="p-3 text-right">16% VAT</th>
-                      <th className="p-3 text-right">Grand Total</th>
-                      <th className="p-3 text-center">Verification URL</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60">
-                    {etimsInvoices.map((inv) => (
-                      <tr key={inv.cuin} className="hover:bg-slate-800/40 transition">
-                        <td className="p-3 font-mono font-bold text-emerald-400">{inv.cuin}</td>
-                        <td className="p-3 text-slate-300">{new Date(inv.invoiceDate).toLocaleDateString()}</td>
-                        <td className="p-3 text-right text-slate-300">{formatKES(inv.taxableAmount)}</td>
-                        <td className="p-3 text-right text-amber-400 font-semibold">{formatKES(inv.vatAmount)}</td>
-                        <td className="p-3 text-right font-bold text-white">{formatKES(inv.grandTotal)}</td>
-                        <td className="p-3 text-center">
-                          <a
-                            href={inv.qrCodeUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[10px] bg-slate-800 hover:bg-slate-700 text-blue-400 px-3 py-1 rounded-md border border-slate-700"
-                          >
-                            Inspect KRA QR Code ↗
-                          </a>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 6: WEALTH & CBK BONDS */}
-        {activeTab === 'wealth' && (
-          <div className="space-y-6">
-            <div>
-              <h3 className="text-lg font-bold text-white mb-1">Central Bank of Kenya (CBK) Wealth & Investments</h3>
-              <p className="text-xs text-slate-400">
-                Treasury Bills, Infrastructure Bonds (IFB), Money Market Funds & NSE Equities
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {holdings.map((h) => (
-                <div key={h.id} className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between text-xs mb-2">
-                      <span className="font-semibold text-blue-400">{h.assetType}</span>
-                      {h.isTaxExempt && (
-                        <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                          Tax Free
-                        </span>
-                      )}
-                    </div>
-                    <h4 className="font-bold text-white text-sm mb-1">{h.name}</h4>
-                    <p className="text-xs text-slate-500 mb-3">{h.institution}</p>
-                    <div className="text-xl font-bold text-white">{formatKES(h.valuation)}</div>
-                  </div>
-
-                  <div className="mt-4 pt-3 border-t border-slate-800 text-xs flex justify-between items-center">
-                    <span className="text-slate-400">Annualized Yield:</span>
-                    <span className="font-bold text-emerald-400">{h.annualYieldPercent}%</span>
+                {/* Table */}
+                <div className="bg-[#111726] border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-slate-300">
+                      <thead className="bg-slate-900/80 text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-800">
+                        <tr>
+                          <th className="py-3 px-4">Date</th>
+                          <th className="py-3 px-4">Description</th>
+                          <th className="py-3 px-4">Category</th>
+                          <th className="py-3 px-4">Source Account</th>
+                          <th className="py-3 px-4">Ref Code</th>
+                          <th className="py-3 px-4 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-mono">
+                        {filteredTransactions.length > 0 ? (
+                          filteredTransactions.map((t) => (
+                            <tr key={t.id} className="hover:bg-slate-900/40 transition-colors">
+                              <td className="py-3 px-4 whitespace-nowrap text-slate-400">{t.date}</td>
+                              <td className="py-3 px-4 font-sans font-medium text-white max-w-xs truncate">{t.description}</td>
+                              <td className="py-3 px-4 font-sans">
+                                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[11px] text-slate-300">
+                                  {t.category}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 font-sans text-slate-400">{t.account_name || 'Account'}</td>
+                              <td className="py-3 px-4 text-slate-500 text-[11px]">{t.reference || '-'}</td>
+                              <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${
+                                t.type === 'income' ? 'text-emerald-400' : t.type === 'expense' ? 'text-rose-400' : 'text-blue-400'
+                              }`}>
+                                {t.type === 'income' ? '+' : t.type === 'expense' ? '-' : '⇄'} {formatKES(t.amount)}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-slate-500 font-sans">
+                              No matching transactions found.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
-              ))}
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-              <h4 className="text-sm font-bold text-white mb-2">12-Month Yield Projection</h4>
-              <p className="text-xs text-slate-400 mb-4">
-                Simulated net returns accounting for Kenya's 15% withholding tax on interest (IFBs are 100% tax exempt)
-              </p>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={holdings}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="name" stroke="#64748b" tick={{ fontSize: 10 }} />
-                    <YAxis stroke="#64748b" tick={{ fontSize: 10 }} />
-                    <Tooltip
-                      formatter={(val: any) => [formatKES(val), 'Valuation']}
-                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
-                    />
-                    <Bar dataKey="valuation" fill="#10B981" radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
               </div>
-            </div>
-          </div>
-        )}
+            )}
 
-        {/* TAB 7: AI FINANCIAL ADVISOR */}
-        {activeTab === 'advisor' && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col h-[650px]">
-            <div className="flex items-center gap-3 pb-4 border-b border-slate-800 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-emerald-500 flex items-center justify-center text-xl font-bold">
-                🦁
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white">Simba AI Kenya Financial Advisor</h3>
-                <p className="text-xs text-slate-400">
-                  Real-time guidance on M-Pesa cash flow, KRA eTIMS tax optimization, and CBK Treasury yields
-                </p>
-              </div>
-            </div>
+            {/* TAB 4: M-PESA & CSV STATEMENT IMPORT */}
+            {activeTab === 'import' && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Import M-Pesa Statements & SMS Messages</h2>
+                  <p className="text-xs text-slate-400">
+                    Paste Safaricom SMS confirmations or statement text to automatically categorize and import transactions.
+                  </p>
+                </div>
 
-            <div className="flex-1 overflow-y-auto space-y-4 pr-2">
-              {chatMessages.map((msg, i) => (
-                <div
-                  key={i}
-                  className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
-                >
-                  <div
-                    className={`max-w-2xl px-4 py-3 rounded-2xl text-xs leading-relaxed whitespace-pre-wrap ${
-                      msg.sender === 'user'
-                        ? 'bg-emerald-600 text-white rounded-br-none'
-                        : 'bg-slate-800 text-slate-200 border border-slate-700 rounded-bl-none'
-                    }`}
-                  >
-                    {msg.text}
-                  </div>
-                  {msg.tips && msg.tips.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {msg.tips.map((tip, idx) => (
-                        <div
-                          key={idx}
-                          className="text-[11px] text-amber-300 bg-amber-950/30 border border-amber-500/20 px-3 py-1.5 rounded-lg"
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Left: Input Form */}
+                  <div className="lg:col-span-2 bg-[#111726] border border-slate-800 rounded-2xl p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-slate-300">Paste M-Pesa SMS or CSV text:</label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleImportStatement('sms')}
+                          className="text-[11px] px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-emerald-400 font-medium"
                         >
-                          {tip}
+                          Load Sample SMS
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleImportStatement('csv')}
+                          className="text-[11px] px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-teal-400 font-medium"
+                        >
+                          Load Sample CSV
+                        </button>
+                      </div>
+                    </div>
+
+                    <textarea
+                      rows={8}
+                      value={importText}
+                      onChange={(e) => setImportText(e.target.value)}
+                      placeholder={`Paste M-Pesa SMS confirmation messages here:\n\nQHL921KK89 Confirmed. Ksh3,200.00 sent to NAIVAS WESTLANDS on 22/10/26 at 11:45 AM...\nQHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10/26...`}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500"
+                    />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs text-slate-400 block mb-1">Target Account to Credit/Debit</label>
+                        <select
+                          value={importAccountId}
+                          onChange={(e) => setImportAccountId(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                        >
+                          {accounts.map((a) => (
+                            <option key={a.id} value={String(a.id)}>
+                              {a.name} ({formatKES(a.balance)})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="flex items-end">
+                        <button
+                          disabled={importLoading}
+                          onClick={() => handleImportStatement()}
+                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                        >
+                          {importLoading ? 'Parsing & Ingesting...' : '📥 Parse & Import Into Account'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Explainer */}
+                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5 space-y-4">
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span>💡</span> How Import Works
+                    </h3>
+                    <ul className="text-xs text-slate-300 space-y-3">
+                      <li className="flex items-start gap-2">
+                        <span className="text-emerald-400">✓</span>
+                        <span>
+                          <strong>Zero API dependencies:</strong> No need for Safaricom business paybills or live callbacks to track personal finances.
+                        </span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <span className="text-emerald-400">✓</span>
+                        <span>
+                          <strong>Automatic Categorization:</strong> Identifies KPLC tokens, Naivas groceries, Rubis fuel, and Safaricom fibre automatically.
+                        </span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <span className="text-emerald-400">✓</span>
+                        <span>
+                          <strong>Duplicate Protection:</strong> Safaricom receipt codes (e.g. <code>QHL921KK89</code>) prevent importing the same transaction twice.
+                        </span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 5: ASSETS & LIABILITIES (NET WORTH DETAILS) */}
+            {activeTab === 'networth' && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Assets & Liabilities Balance Sheet</h2>
+                    <p className="text-xs text-slate-400">Physical property, land, vehicles vs outstanding loans & mortgages</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowAssetModal(true)}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg"
+                    >
+                      + Add Asset
+                    </button>
+                    <button
+                      onClick={() => setShowLiabModal(true)}
+                      className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg"
+                    >
+                      + Add Debt / Loan
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Physical Assets Column */}
+                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>🏡</span> Physical & Fixed Assets
+                      </h3>
+                      <span className="text-xs font-bold text-emerald-400">
+                        {formatKES(metrics?.physicalAssets || 0)}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {assets.map((asset) => (
+                        <div
+                          key={asset.id}
+                          className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="text-xs font-bold text-white">{asset.name}</p>
+                            <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
+                              {asset.category}
+                            </span>
+                            {asset.notes && <p className="text-[11px] text-slate-500 mt-1">{asset.notes}</p>}
+                          </div>
+                          <span className="text-sm font-extrabold text-emerald-400">
+                            {formatKES(asset.estimated_value)}
+                          </span>
                         </div>
                       ))}
                     </div>
-                  )}
+                  </div>
+
+                  {/* Liabilities & Debts Column */}
+                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>🏛️</span> Outstanding Liabilities
+                      </h3>
+                      <span className="text-xs font-bold text-rose-400">
+                        {formatKES(metrics?.totalLiabilities || 0)}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {liabilities.map((liab) => (
+                        <div
+                          key={liab.id}
+                          className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="text-xs font-bold text-white">{liab.name}</p>
+                            <p className="text-[11px] text-slate-400">
+                              {liab.creditor} • {liab.interest_rate ? `${liab.interest_rate}% p.a.` : 'Standard'}
+                            </p>
+                            {liab.monthly_payment && (
+                              <p className="text-[11px] text-amber-400 mt-1">
+                                Pay: {formatKES(liab.monthly_payment)}/mo
+                              </p>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <span className="text-sm font-extrabold text-rose-400">
+                              {formatKES(liab.outstanding_balance)}
+                            </span>
+                            <span className="block text-[10px] text-slate-500">
+                              Orig: {formatKES(liab.principal_amount)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              ))}
-              {chatLoading && (
-                <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                  Simba AI is synthesizing your financial data...
+              </div>
+            )}
+
+            {/* TAB 6: BUDGETS & SAVINGS GOALS */}
+            {activeTab === 'goals' && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Savings Goals & Monthly Budgets</h2>
+                    <p className="text-xs text-slate-400">Target funds for emergency safety, land purchase, and monthly category limits</p>
+                  </div>
+                  <button
+                    onClick={() => setShowGoalModal(true)}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 self-start"
+                  >
+                    <span>+</span> New Savings Goal
+                  </button>
                 </div>
-              )}
+
+                {/* Savings Goals Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {goals.map((g) => {
+                    const percent = Math.min(100, (g.current_amount / g.target_amount) * 100);
+                    return (
+                      <div
+                        key={g.id}
+                        className="bg-[#111726] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-sm"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <span>🎯 Target: {formatKES(g.target_amount)}</span>
+                            <span>{percent.toFixed(0)}%</span>
+                          </div>
+                          <h3 className="text-sm font-bold text-white mt-1">{g.name}</h3>
+
+                          <div className="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
+                            <div
+                              className="bg-gradient-to-r from-teal-500 to-emerald-400 h-full rounded-full transition-all"
+                              style={{ width: `${percent}%` }}
+                            ></div>
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs mt-3">
+                            <span className="text-slate-400">Saved so far:</span>
+                            <span className="font-bold text-emerald-400">{formatKES(g.current_amount)}</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 pt-4 border-t border-slate-800 flex gap-2">
+                          <button
+                            onClick={() => handleContributeGoal(g.id, 5000)}
+                            className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs py-1.5 rounded-lg"
+                          >
+                            + KSh 5,000
+                          </button>
+                          <button
+                            onClick={() => handleContributeGoal(g.id, 20000)}
+                            className="flex-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 text-xs py-1.5 rounded-lg border border-emerald-500/30"
+                          >
+                            + KSh 20,000
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Monthly Budgets List */}
+                <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5">
+                  <h3 className="text-sm font-bold text-white mb-4">Monthly Spending Limits by Kenyan Category</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {budgets.map((b) => (
+                      <div
+                        key={b.id}
+                        className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between"
+                      >
+                        <span className="text-xs font-semibold text-slate-200">{b.category}</span>
+                        <span className="text-xs font-mono font-bold text-emerald-400">
+                          {formatKES(b.monthly_limit)} / month
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </main>
+
+      {/* MODAL: ADD TRANSACTION */}
+      {showTxModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white">Record Transaction</h3>
+              <button onClick={() => setShowTxModal(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <form onSubmit={handleSendChat} className="mt-4 pt-3 border-t border-slate-800 flex gap-2">
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask Simba AI (e.g. 'How can I save on KRA taxes using eTIMS?' or 'Where should I park my M-Pesa surplus?')..."
-                className="flex-1 bg-slate-800 text-xs px-4 py-3 rounded-xl border border-slate-700 text-white focus:outline-none focus:border-emerald-500"
-              />
+            <form onSubmit={handleCreateTransaction} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Account</label>
+                <select
+                  value={newTx.account_id}
+                  onChange={(e) => setNewTx({ ...newTx, account_id: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                >
+                  {accounts.map((a) => (
+                    <option key={a.id} value={String(a.id)}>{a.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Type</label>
+                  <select
+                    value={newTx.type}
+                    onChange={(e) => setNewTx({ ...newTx, type: e.target.value as any })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  >
+                    <option value="expense">Expense</option>
+                    <option value="income">Income</option>
+                    <option value="transfer">Transfer</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Amount (KES)</label>
+                  <input
+                    type="number"
+                    required
+                    value={newTx.amount}
+                    onChange={(e) => setNewTx({ ...newTx, amount: e.target.value })}
+                    placeholder="e.g. 2500"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Description / Merchant</label>
+                <input
+                  type="text"
+                  required
+                  value={newTx.description}
+                  onChange={(e) => setNewTx({ ...newTx, description: e.target.value })}
+                  placeholder="e.g. Naivas Supermarket Food"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Category</label>
+                  <select
+                    value={newTx.category}
+                    onChange={(e) => setNewTx({ ...newTx, category: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  >
+                    {CATEGORIES_LIST.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={newTx.date}
+                    onChange={(e) => setNewTx({ ...newTx, date: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Reference (M-Pesa / Bank Ref - Optional)</label>
+                <input
+                  type="text"
+                  value={newTx.reference}
+                  onChange={(e) => setNewTx({ ...newTx, reference: e.target.value })}
+                  placeholder="e.g. QHL921KK89"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white font-mono"
+                />
+              </div>
+
               <button
                 type="submit"
-                disabled={chatLoading}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-3 rounded-xl text-xs transition"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
               >
-                Send
+                Save Transaction
               </button>
             </form>
           </div>
-        )}
-      </main>
+        </div>
+      )}
+
+      {/* MODAL: ADD ACCOUNT */}
+      {showAccModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white">Add New Financial Account</h3>
+              <button onClick={() => setShowAccModal(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleCreateAccount} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Account Name</label>
+                <input
+                  type="text"
+                  required
+                  value={newAcc.name}
+                  onChange={(e) => setNewAcc({ ...newAcc, name: e.target.value })}
+                  placeholder="e.g. Co-op Salary Current Account"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Institution</label>
+                <input
+                  type="text"
+                  value={newAcc.institution}
+                  onChange={(e) => setNewAcc({ ...newAcc, institution: e.target.value })}
+                  placeholder="e.g. Co-operative Bank of Kenya"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Account Type</label>
+                  <select
+                    value={newAcc.account_type}
+                    onChange={(e) => setNewAcc({ ...newAcc, account_type: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  >
+                    <option value="mobile_money">Mobile Money (M-Pesa)</option>
+                    <option value="bank_checking">Bank Checking</option>
+                    <option value="bank_savings">Bank Savings</option>
+                    <option value="sacco">SACCO Deposit</option>
+                    <option value="investment">MMF / Investment</option>
+                    <option value="cash">Physical Cash</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Starting Balance (KES)</label>
+                  <input
+                    type="number"
+                    value={newAcc.balance}
+                    onChange={(e) => setNewAcc({ ...newAcc, balance: e.target.value })}
+                    placeholder="0"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
+              >
+                Create Account
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD ASSET */}
+      {showAssetModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white">Add Physical / Fixed Asset</h3>
+              <button onClick={() => setShowAssetModal(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleCreateAsset} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Asset Name</label>
+                <input
+                  type="text"
+                  required
+                  value={newAsset.name}
+                  onChange={(e) => setNewAsset({ ...newAsset, name: e.target.value })}
+                  placeholder="e.g. 50x100 Plot in Kitengela"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Category</label>
+                  <select
+                    value={newAsset.category}
+                    onChange={(e) => setNewAsset({ ...newAsset, category: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  >
+                    <option value="land">Land & Plots</option>
+                    <option value="real_estate">Real Estate & Houses</option>
+                    <option value="vehicle">Motor Vehicle</option>
+                    <option value="investments">NSE Stocks / Bonds</option>
+                    <option value="valuables">Valuables & Tech</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Valuation (KES)</label>
+                  <input
+                    type="number"
+                    required
+                    value={newAsset.estimated_value}
+                    onChange={(e) => setNewAsset({ ...newAsset, estimated_value: e.target.value })}
+                    placeholder="e.g. 1500000"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Notes (Optional)</label>
+                <input
+                  type="text"
+                  value={newAsset.notes}
+                  onChange={(e) => setNewAsset({ ...newAsset, notes: e.target.value })}
+                  placeholder="e.g. Clean title deed, verified by surveyor"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
+              >
+                Save Asset to Balance Sheet
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD LIABILITY */}
+      {showLiabModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white">Record Liability / Debt</h3>
+              <button onClick={() => setShowLiabModal(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleCreateLiability} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Loan / Liability Name</label>
+                <input
+                  type="text"
+                  required
+                  value={newLiab.name}
+                  onChange={(e) => setNewLiab({ ...newLiab, name: e.target.value })}
+                  placeholder="e.g. KCB Secured Car Loan"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Creditor Institution</label>
+                <input
+                  type="text"
+                  value={newLiab.creditor}
+                  onChange={(e) => setNewLiab({ ...newLiab, creditor: e.target.value })}
+                  placeholder="e.g. KCB Bank / HELB / SACCO"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Outstanding Balance (KES)</label>
+                  <input
+                    type="number"
+                    required
+                    value={newLiab.outstanding_balance}
+                    onChange={(e) => setNewLiab({ ...newLiab, outstanding_balance: e.target.value })}
+                    placeholder="e.g. 450000"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Monthly Payment (KES)</label>
+                  <input
+                    type="number"
+                    value={newLiab.monthly_payment}
+                    onChange={(e) => setNewLiab({ ...newLiab, monthly_payment: e.target.value })}
+                    placeholder="e.g. 15000"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
+              >
+                Record Liability
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD GOAL */}
+      {showGoalModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white">Create Savings Goal</h3>
+              <button onClick={() => setShowGoalModal(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleCreateGoal} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Goal Name</label>
+                <input
+                  type="text"
+                  required
+                  value={newGoal.name}
+                  onChange={(e) => setNewGoal({ ...newGoal, name: e.target.value })}
+                  placeholder="e.g. 6-Month Emergency Fund"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Target Amount (KES)</label>
+                  <input
+                    type="number"
+                    required
+                    value={newGoal.target_amount}
+                    onChange={(e) => setNewGoal({ ...newGoal, target_amount: e.target.value })}
+                    placeholder="e.g. 300000"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Initial Saved (KES)</label>
+                  <input
+                    type="number"
+                    value={newGoal.current_amount}
+                    onChange={(e) => setNewGoal({ ...newGoal, current_amount: e.target.value })}
+                    placeholder="0"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
+              >
+                Create Goal
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
