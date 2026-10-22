@@ -1,10 +1,13 @@
 /**
  * Safaricom M-Pesa Daraja 2.0 API Client & Callback Processor
+ *
+ * IMPORTANT: This module requires valid Safaricom Daraja API credentials.
+ * No mock/fallback behavior is used. Missing credentials will throw errors.
+ *
  * Supports:
  * - STK Push (Lipa Na M-Pesa Online)
  * - C2B Real-time Validation & Confirmation Callbacks
- * - Transaction Status & Balance Inquiry
- * - Cash Flow Ingestion & Categorization
+ * - Transaction Status Query
  */
 
 export interface DarajaSTKPushParams {
@@ -50,6 +53,14 @@ export interface STKPushCallbackPayload {
   };
 }
 
+export interface STKPushResult {
+  MerchantRequestID: string;
+  CheckoutRequestID: string;
+  ResponseCode: string;
+  ResponseDescription: string;
+  CustomerMessage: string;
+}
+
 class DarajaService {
   private consumerKey: string;
   private consumerSecret: string;
@@ -58,11 +69,31 @@ class DarajaService {
   private env: 'sandbox' | 'production';
 
   constructor() {
-    this.consumerKey = process.env.MPESA_CONSUMER_KEY || 'daraja_sandbox_key';
-    this.consumerSecret = process.env.MPESA_CONSUMER_SECRET || 'daraja_sandbox_secret';
-    this.passkey = process.env.MPESA_PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
-    this.shortCode = process.env.MPESA_SHORTCODE || '174379';
-    this.env = (process.env.MPESA_ENVIRONMENT as any) === 'production' ? 'production' : 'sandbox';
+    const key = process.env.MPESA_CONSUMER_KEY;
+    const secret = process.env.MPESA_CONSUMER_SECRET;
+    const passkey = process.env.MPESA_PASSKEY;
+    const shortCode = process.env.MPESA_SHORTCODE;
+
+    if (!key || !secret || !passkey || !shortCode) {
+      console.warn(
+        'M-Pesa Daraja credentials are not configured. ' +
+        'Set MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_PASSKEY, and MPESA_SHORTCODE in .env.local. ' +
+        'STK Push and other Daraja operations will fail until credentials are provided.'
+      );
+    }
+
+    this.consumerKey = key || '';
+    this.consumerSecret = secret || '';
+    this.passkey = passkey || '';
+    this.shortCode = shortCode || '';
+    this.env = (process.env.MPESA_ENVIRONMENT as 'sandbox' | 'production') === 'production' ? 'production' : 'sandbox';
+  }
+
+  /**
+   * Returns true if all required Daraja credentials are configured.
+   */
+  isConfigured(): boolean {
+    return !!(this.consumerKey && this.consumerSecret && this.passkey && this.shortCode);
   }
 
   private getBaseUrl(): string {
@@ -72,28 +103,45 @@ class DarajaService {
   }
 
   /**
-   * Generates Daraja OAuth Access Token
+   * Validates that credentials are present before any API call.
+   */
+  private assertConfigured(): void {
+    if (!this.isConfigured()) {
+      throw new Error(
+        'M-Pesa Daraja API is not configured. ' +
+        'Missing one or more of: MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_PASSKEY, MPESA_SHORTCODE.'
+      );
+    }
+  }
+
+  /**
+   * Generates Daraja OAuth Access Token.
+   * Throws on failure — never returns fake tokens.
    */
   async getAccessToken(): Promise<string> {
+    this.assertConfigured();
+
     const auth = Buffer.from(`${this.consumerKey}:${this.consumerSecret}`).toString('base64');
-    try {
-      const res = await fetch(`${this.getBaseUrl()}/oauth/v1/generate?grant_type=client_credentials`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Basic ${auth}`,
-        },
-      });
 
-      if (!res.ok) {
-        // Fallback for offline/simulated developer testing
-        return 'mock_daraja_access_token_' + Date.now();
-      }
+    const res = await fetch(`${this.getBaseUrl()}/oauth/v1/generate?grant_type=client_credentials`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${auth}`,
+      },
+    });
 
-      const data = await res.json();
-      return data.access_token || 'mock_daraja_access_token_' + Date.now();
-    } catch {
-      return 'mock_daraja_access_token_' + Date.now();
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Daraja OAuth failed (HTTP ${res.status}): ${body}`);
     }
+
+    const data = await res.json();
+
+    if (!data.access_token) {
+      throw new Error('Daraja OAuth response did not contain an access_token');
+    }
+
+    return data.access_token;
   }
 
   /**
@@ -106,16 +154,19 @@ class DarajaService {
   }
 
   /**
-   * Triggers an STK Push to the customer's phone
+   * Triggers an STK Push to the customer's phone.
+   * Returns the Safaricom response directly. Never fakes success.
    */
-  async initiateSTKPush(params: DarajaSTKPushParams) {
+  async initiateSTKPush(params: DarajaSTKPushParams): Promise<STKPushResult> {
+    this.assertConfigured();
+
     const formattedPhone = this.formatKenyanPhone(params.phoneNumber);
     const timestamp = this.getTimestamp();
     const password = Buffer.from(`${this.shortCode}${this.passkey}${timestamp}`).toString('base64');
     const token = await this.getAccessToken();
 
-    const host = process.env.NEXT_PUBLIC_APP_URL || 'https://dashboard.local';
-    const callbackUrl = params.callbackUrl || `${host}/api/mpesa/callback`;
+    const host = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const callbackUrl = params.callbackUrl || `${host}/api/integrations/mpesa/callbacks/stk`;
 
     const payload = {
       BusinessShortCode: this.shortCode,
@@ -131,36 +182,32 @@ class DarajaService {
       TransactionDesc: params.transactionDesc.substring(0, 20),
     };
 
-    try {
-      const res = await fetch(`${this.getBaseUrl()}/mpesa/stkpush/v1/processrequest`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+    const res = await fetch(`${this.getBaseUrl()}/mpesa/stkpush/v1/processrequest`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
 
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.warn('Daraja API network call failed, falling back to instant sandbox simulation:', err);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Daraja STK Push failed (HTTP ${res.status}): ${body}`);
     }
 
-    // Realistic Simulated Sandbox Response
-    const checkoutRequestId = 'ws_CO_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
-    return {
-      MerchantRequestID: 'MR_' + Math.floor(Math.random() * 900000 + 100000),
-      CheckoutRequestID: checkoutRequestId,
-      ResponseCode: '0',
-      ResponseDescription: 'Success. Request accepted for processing',
-      CustomerMessage: `Success. Prompt sent to ${formattedPhone}. Enter M-Pesa PIN to complete payment of KES ${params.amount}.`,
-    };
+    const data = await res.json();
+
+    // Safaricom returns ResponseCode "0" for accepted requests
+    if (data.ResponseCode !== '0') {
+      throw new Error(`STK Push rejected by Safaricom: ${data.ResponseDescription || data.errorMessage || 'Unknown error'}`);
+    }
+
+    return data as STKPushResult;
   }
 
   /**
-   * Helper to format any Kenyan phone number to 2547XXXXXXXX or 2541XXXXXXXX
+   * Format any Kenyan phone number to 2547XXXXXXXX or 2541XXXXXXXX
    */
   formatKenyanPhone(phone: string): string {
     const clean = phone.replace(/[^0-9]/g, '');
@@ -168,11 +215,11 @@ class DarajaService {
     if (clean.startsWith('0') && clean.length === 10) return '254' + clean.slice(1);
     if (clean.startsWith('7') && clean.length === 9) return '254' + clean;
     if (clean.startsWith('1') && clean.length === 9) return '254' + clean;
-    return '254712345678';
+    throw new Error(`Invalid Kenyan phone number format: ${phone}`);
   }
 
   /**
-   * Parses STK Push callback metadata items
+   * Parses STK Push callback metadata items into a structured object.
    */
   parseSTKCallback(payload: STKPushCallbackPayload) {
     const stk = payload.Body.stkCallback;
@@ -186,8 +233,8 @@ class DarajaService {
       resultDesc: stk.ResultDesc,
       isSuccessful: stk.ResultCode === 0,
       amount: Number(getVal('Amount') || 0),
-      mpesaReceiptNumber: String(getVal('MpesaReceiptNumber') || 'RJL' + Math.random().toString(36).substring(2, 8).toUpperCase()),
-      transactionDate: String(getVal('TransactionDate') || this.getTimestamp()),
+      mpesaReceiptNumber: String(getVal('MpesaReceiptNumber') || ''),
+      transactionDate: String(getVal('TransactionDate') || ''),
       phoneNumber: String(getVal('PhoneNumber') || ''),
     };
   }

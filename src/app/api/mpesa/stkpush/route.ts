@@ -13,6 +13,16 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!mpesaService.isConfigured()) {
+      return NextResponse.json(
+        {
+          error: 'M-Pesa Daraja API is not configured. Set MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_PASSKEY, and MPESA_SHORTCODE in your environment.',
+          configured: false,
+        },
+        { status: 503 }
+      );
+    }
+
     const result = await mpesaService.initiateSTKPush({
       phoneNumber: String(phoneNumber),
       amount: Number(amount),
@@ -20,11 +30,15 @@ export async function POST(request: Request) {
       transactionDesc: transactionDesc || 'Payment',
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      status: 'pending',
+      message: 'STK Push sent to customer phone. Await Safaricom callback for confirmation.',
+    });
   } catch (error: any) {
-    console.error('STK Push error:', error);
+    console.error('[STK Push] Error:', error.message);
     return NextResponse.json(
-      { error: error.message || 'Failed to trigger STK Push' },
+      { error: error.message || 'STK Push request failed', status: 'failed' },
       { status: 500 }
     );
   }

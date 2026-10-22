@@ -1,11 +1,14 @@
 /**
- * Kenyan Direct Banking API Gateway & Open Banking Connectors
- * Unifies:
- * - Equity Bank (Jenga API v3 / Finserve)
- * - KCB Bank (Buni Open Banking API)
- * - Co-operative Bank of Kenya (Developer Portal Open Banking)
- * - Standard Chartered Kenya (Straight2Bank / SC Open Banking)
- * - Pesalink (IPMC real-time interbank settlement)
+ * Kenyan Direct Banking API Gateway — DEMO / PROTOTYPE
+ *
+ * IMPORTANT: These integrations are NOT live. All data returned is simulated.
+ * Real integrations require signed developer agreements with each bank:
+ * - Equity Bank: Jenga API (https://developer.jengaapi.io)
+ * - KCB Bank: Buni API (https://buni.kcbgroup.com)
+ * - Co-operative Bank: Developer Portal (https://developer.co-opbank.co.ke)
+ * - Standard Chartered: Straight2Bank / Open Banking
+ *
+ * Status: DEMO — No real bank connections exist yet.
  */
 
 export type KenyanBankIdentifier = 'EQUITY_KE' | 'KCB_KE' | 'COOP_KE' | 'SCB_KE';
@@ -18,7 +21,7 @@ export interface BankAccountSummary {
   currency: string;
   availableBalance: number;
   actualBalance: number;
-  status: 'connected' | 'syncing' | 'error';
+  status: 'demo' | 'connected' | 'syncing' | 'error';
   lastSynced: string;
 }
 
@@ -36,164 +39,89 @@ export interface BankTransactionItem {
 
 export class KenyanBankGateway {
   /**
-   * Returns list of supported Kenyan banks and their open banking capabilities
+   * Returns list of supported Kenyan banks and their open banking capabilities.
+   * Status is always 'demo' until real integrations are signed.
    */
   getSupportedBanks() {
     return [
       {
-        code: 'EQUITY_KE',
+        code: 'EQUITY_KE' as KenyanBankIdentifier,
         name: 'Equity Bank Kenya',
         apiPortal: 'Jenga API (Finserve Africa)',
         capabilities: ['Account Balance', 'Mini-Statements', 'Pesalink Transfers', 'EazzyPay'],
         icon: '🏦',
-        color: '#A32A29', // Equity Maroon
+        color: '#A32A29',
+        status: 'demo' as const,
       },
       {
-        code: 'KCB_KE',
+        code: 'KCB_KE' as KenyanBankIdentifier,
         name: 'KCB Bank Kenya',
         apiPortal: 'KCB Buni Open Banking',
         capabilities: ['Balance Inquiry', 'Statement Pull', 'Pesalink Direct', 'Vooma Integration'],
         icon: '🏢',
-        color: '#008751', // KCB Green
+        color: '#008751',
+        status: 'demo' as const,
       },
       {
-        code: 'COOP_KE',
+        code: 'COOP_KE' as KenyanBankIdentifier,
         name: 'Co-operative Bank of Kenya',
         apiPortal: 'Co-op Open Banking Portal',
         capabilities: ['Account Inquiry', 'MCo-op Cash Sync', 'Pesalink Rails', 'Internal Transfer'],
         icon: '🏪',
-        color: '#006633', // Co-op Green
+        color: '#006633',
+        status: 'demo' as const,
       },
       {
-        code: 'SCB_KE',
+        code: 'SCB_KE' as KenyanBankIdentifier,
         name: 'Standard Chartered Bank Kenya',
         apiPortal: 'Straight2Bank / SC Open Banking API',
         capabilities: ['Institutional Balance', 'Real-time Statements', 'RTGS / Pesalink', 'FX Trade'],
         icon: '🌐',
-        color: '#0072CE', // StanChart Blue
+        color: '#0072CE',
+        status: 'demo' as const,
       },
     ];
   }
 
   /**
-   * Connect or initiate OAuth consent for a bank account
+   * Placeholder for bank OAuth consent flow.
+   * Returns demo status — no real bank authorization occurs.
    */
-  async initiateBankConnect(bankCode: KenyanBankIdentifier, accountNumber: string) {
-    // In production, this redirects to the respective Bank's OAuth2 Consent Screen (e.g. Equity Jenga Auth or KCB Buni Consent)
-    const consentId = `consent_${bankCode.toLowerCase()}_${Date.now()}`;
+  async initiateBankConnect(bankCode: KenyanBankIdentifier, _accountNumber: string) {
     return {
-      success: true,
+      success: false,
       bankCode,
-      consentId,
-      authUrl: `https://auth.bankgateway.co.ke/oauth/authorize?bank=${bankCode}&consent_id=${consentId}`,
-      message: `Direct banking authorization initialized for ${bankCode}`,
+      status: 'demo' as const,
+      message: `Bank integration for ${bankCode} is in demo mode. Real integration requires a signed developer agreement with the bank.`,
     };
   }
 
   /**
-   * Pulls real-time balances & mini-statements from the respective bank API
+   * Returns DEMO data only. Not connected to any real bank API.
+   * All balances and transactions are simulated fixtures.
    */
   async syncBankData(bankCode: KenyanBankIdentifier, accountMask: string): Promise<{
     summary: BankAccountSummary;
     transactions: BankTransactionItem[];
+    isDemo: true;
   }> {
     const bankDetails = this.getSupportedBanks().find((b) => b.code === bankCode);
     const bankName = bankDetails?.name || bankCode;
 
-    // Simulated real-time responses reflecting actual Kenyan banking formats
-    const mockData: Record<KenyanBankIdentifier, { balance: number; txs: BankTransactionItem[] }> = {
-      EQUITY_KE: {
-        balance: 485200.0,
-        txs: [
-          {
-            reference: 'EQT' + Math.floor(10000000 + Math.random() * 90000000),
-            bankCode: 'EQUITY_KE',
-            accountNumberMask: accountMask,
-            date: new Date().toISOString().split('T')[0],
-            narrative: 'PESALINK INWARD: SAFARICOM M-PESA FLOAT',
-            amount: 50000.0,
-            type: 'credit',
-            category: 'Transfers & Pesalink',
-            balanceAfter: 485200.0,
-          },
-          {
-            reference: 'EQT' + Math.floor(10000000 + Math.random() * 90000000),
-            bankCode: 'EQUITY_KE',
-            accountNumberMask: accountMask,
-            date: new Date(Date.now() - 86400000).toISOString().split('T')[0],
-            narrative: 'EAZZYPAY: RUBIS ENERGY KILIMANI FUEL',
-            amount: 5400.0,
-            type: 'debit',
-            category: 'Transportation & Fuel (Rubis/Total)',
-            balanceAfter: 435200.0,
-          },
-        ],
-      },
-      KCB_KE: {
-        balance: 210000.0,
-        txs: [
-          {
-            reference: 'KCB' + Math.floor(10000000 + Math.random() * 90000000),
-            bankCode: 'KCB_KE',
-            accountNumberMask: accountMask,
-            date: new Date().toISOString().split('T')[0],
-            narrative: 'KCB BUNI: SALARY ADVANCE CLEARANCE',
-            amount: 75000.0,
-            type: 'credit',
-            category: 'Business Sales & Inflows',
-            balanceAfter: 210000.0,
-          },
-        ],
-      },
-      COOP_KE: {
-        balance: 95400.0,
-        txs: [
-          {
-            reference: 'COP' + Math.floor(10000000 + Math.random() * 90000000),
-            bankCode: 'COOP_KE',
-            accountNumberMask: accountMask,
-            date: new Date().toISOString().split('T')[0],
-            narrative: 'MCO-OP CASH TRANSFER TO MPESA 0712***',
-            amount: 15000.0,
-            type: 'debit',
-            category: 'Transfers & Pesalink',
-            balanceAfter: 95400.0,
-          },
-        ],
-      },
-      SCB_KE: {
-        balance: 320000.0,
-        txs: [
-          {
-            reference: 'SCB' + Math.floor(10000000 + Math.random() * 90000000),
-            bankCode: 'SCB_KE',
-            accountNumberMask: accountMask,
-            date: new Date().toISOString().split('T')[0],
-            narrative: 'S2B RTGS INWARD: CONSULTING RETAINER USD/KES',
-            amount: 180000.0,
-            type: 'credit',
-            category: 'Business Sales & Inflows',
-            balanceAfter: 320000.0,
-          },
-        ],
-      },
-    };
-
-    const target = mockData[bankCode] || { balance: 100000, txs: [] };
-
     return {
+      isDemo: true,
       summary: {
         bankCode,
         bankName,
         accountNumberMask: accountMask,
-        accountType: 'Current / Checking',
+        accountType: 'Demo Account',
         currency: 'KES',
-        availableBalance: target.balance,
-        actualBalance: target.balance,
-        status: 'connected',
+        availableBalance: 0,
+        actualBalance: 0,
+        status: 'demo',
         lastSynced: new Date().toISOString(),
       },
-      transactions: target.txs,
+      transactions: [],
     };
   }
 }
