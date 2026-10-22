@@ -4,9 +4,8 @@ A comprehensive, production-ready financial ecosystem built for Kenya and East A
 
 ---
 
-## 🧭 Why Native Rails Instead of Plaid or Mono?
+## 🧭 Why Native Rails for Kenya?
 
-- **Plaid Does Not Work in Kenya**: Plaid exclusively targets North American and European open banking networks. It has 0% support for Kenyan banks and mobile money (M-Pesa).
 - **Mono Has Critical Limitations**: Mono's coverage in Kenya depends primarily on fragile screen-scraping which breaks with bank 2FA/OTPs and does not provide real-time Safaricom C2B callbacks.
 - **The Native Solution**:
   1. **Safaricom M-Pesa Daraja 2.0**: The primary lifeline of personal cash flow in Kenya. Handles Lipa Na M-Pesa Online (STK Push) and instant C2B/B2C callbacks.
