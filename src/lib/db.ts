@@ -3,10 +3,13 @@ import { Pool } from 'pg';
 let pool: Pool | null = null;
 
 function getPool(): Pool {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is not defined in environment variables. Database connection cannot be established.');
+  }
   if (!pool) {
     pool = new Pool({
-      connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/finance_dashboard',
-      connectionTimeoutMillis: 3000,
+      connectionString: process.env.DATABASE_URL,
+      connectionTimeoutMillis: 5000,
     });
   }
   return pool;
@@ -14,7 +17,7 @@ function getPool(): Pool {
 
 export async function query(text: string, params?: any[]) {
   if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not defined in environment variables');
+    throw new Error('DATABASE_URL is not defined in environment variables. Database connection is required.');
   }
 
   const p = getPool();

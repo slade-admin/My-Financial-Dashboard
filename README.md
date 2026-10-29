@@ -1,44 +1,78 @@
-# Kenya Personal Finance & Wealth Dashboard 🇰🇪
+# HisaKenya Personal Wealth Dashboard
 
-A comprehensive, production-ready financial ecosystem built for Kenya and East Africa. Powered by **Next.js 16**, **TypeScript**, **Python Pydantic/SQLAlchemy Models (`models.py`)**, and native Kenyan financial rails.
+A personal financial dashboard built with Next.js, React, and TypeScript. It tracks personal accounts, transactions, assets, liabilities, monthly budgets, and savings goals, and supports importing transactions from M-Pesa statements and SMS messages.
 
----
+## Features on this Branch
 
-## 🧭 Why Native Rails for Kenya?
-
-- **Mono Has Critical Limitations**: Mono's coverage in Kenya depends primarily on fragile screen-scraping which breaks with bank 2FA/OTPs and does not provide real-time Safaricom C2B callbacks.
-- **The Native Solution**:
-  1. **Safaricom M-Pesa Daraja 2.0**: The primary lifeline of personal cash flow in Kenya. Handles Lipa Na M-Pesa Online (STK Push) and instant C2B/B2C callbacks.
-  2. **Kenyan Direct Banking Gateways**: Open banking connectors for **Equity Bank (Jenga API v3)**, **KCB Bank (Buni API)**, **Co-operative Bank**, and **Standard Chartered (Straight2Bank)**, bridged by the **Pesalink** interbank rail.
-  3. **Unified Checkout & Aggregators**: **PayPal** orders capture for USD remittances and freelance earnings with live KES FX conversion, alongside card aggregators (Pesapal / Flutterwave).
-  4. **KRA eTIMS Tax Compliance**: Real-time sales fiscalization via KRA's Virtual Sales Control Unit (VSCU) / OSCU, generating **Control Unit Invoice Numbers (CUIN)**, 16% VAT computations, and official KRA verification QR codes.
-  5. **Central Bank of Kenya (CBK) Wealth Domain**: Modeling 91/182/364-day Treasury Bills, Infrastructure Bonds (IFB tax-free), Money Market Funds (MMFs), and NSE equities.
-  6. **Simba AI Financial Advisor**: Tailored Kenyan financial advisory powered by OpenRouter / LLMs.
+- **Net Worth & Metrics**: Computes liquid cash, physical assets, total liabilities, net worth, and monthly cash flow metrics.
+- **Accounts & Balances**: View and manage bank, SACCO, mobile money, and investment accounts.
+- **Transactions & Categories**: Log income, expenses, and transfers categorized across Kenyan household spending categories.
+- **M-Pesa Statement & SMS Import**: Paste and parse M-Pesa SMS confirmations or CSV statement rows into transactions.
+- **Assets & Liabilities**: Track estimated values of property, vehicles, and valuables alongside personal, auto, and SACCO loans.
+- **Budgets & Goals**: Monitor monthly spending targets and contribute towards personal savings goals.
+- **Explicit Demo Seeding**: Fixture data has been decoupled from application source code into a standalone database seed script (`scripts/seed-demo.ts`).
+- **Fail-Fast Database Validation**: Requires an explicit `DATABASE_URL` environment variable. Silent fallbacks have been removed so database errors surface immediately.
 
 ---
 
-## 🏛️ System Architecture
+## Prerequisites
 
-Refer to the complete architectural blueprint artifact:
-[financial_dashboard_kenya_architecture.md](file:///C:/Users/USER/.gemini/antigravity-ide/brain/43771c18-8c58-4258-abca-650ecc80420b/financial_dashboard_kenya_architecture.md)
-
-- **Topmost Box**: `Users` (Individual, MSME, Merchant, Freelancer)
-- **User Experience**: Cash Flow, Portfolio, AI Advisor Panel, Unified Checkout, and KRA eTIMS Hub
-- **API Surface**: `/api/mpesa/*`, `/api/banks/*`, `/api/checkout`, `/api/compliance/etims`, `/api/wealth/portfolio`, `/api/advisor/chat`
-- **Bottommost Box**: `Financial records, models.py` and `schema.sql`
+- **Node.js**: v20 or newer
+- **PostgreSQL**: A running PostgreSQL instance with a database created
 
 ---
 
-## 🚀 Quick Start
+## Getting Started
 
-### 1. Install & Run
+### 1. Environment Configuration
+
+Create a `.env` or `.env.local` file in the root directory and specify your PostgreSQL connection string:
+
+```env
+DATABASE_URL=postgresql://username:password@localhost:5432/finance_dashboard
+```
+
+> **Note**: `DATABASE_URL` is required. The server will fail to start if this environment variable is missing.
+
+### 2. Database Setup
+
+Apply the schema to your PostgreSQL database:
+
 ```bash
-npm install
+psql $DATABASE_URL -f schema.sql
+```
+
+### 3. Optional: Seed Demo Data
+
+To populate the database with demo accounts, transactions, assets, and goals:
+
+```bash
+npm run seed:demo
+```
+
+### 4. Running the Application
+
+Start the development server (defaults to port `3000`):
+
+```bash
 npm run dev
 ```
 
-Visit [http://localhost:3000](http://localhost:3000) in your browser.
+To run on a custom port, pass the `PORT` environment variable:
 
-### 2. Database & Data Models
-- Data models: [models.py](file:///c:/Users/USER/OneDrive/Desktop/School/My-Financial-Dashboard/models.py)
-- Database schema: [schema.sql](file:///c:/Users/USER/OneDrive/Desktop/School/My-Financial-Dashboard/schema.sql)
+```bash
+PORT=9000 npm run dev
+```
+
+Visit [http://localhost:3000](http://localhost:3000) (or your chosen port) in your browser.
+
+---
+
+## Scripts
+
+- `npm run dev`: Starts the Next.js development server (uses `PORT`, defaults to `3000`).
+- `npm run build`: Compiles and builds the production application.
+- `npm run start`: Starts the Next.js production server (uses `PORT`, defaults to `3000`).
+- `npm run typecheck`: Runs TypeScript compiler check (`tsc --noEmit`).
+- `npm run seed:demo`: Seeds initial demo fixtures into PostgreSQL.
+- `npm run lint`: Runs ESLint checks.

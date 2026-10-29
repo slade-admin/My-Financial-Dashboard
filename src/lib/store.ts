@@ -84,339 +84,63 @@ export const KENYAN_EXPENSE_CATEGORIES = [
   { name: 'Other', icon: '📦', color: '#6B7280' },
 ];
 
-// Clean Initial Starter Fixtures for Personal Wealth
-let accountsStore: PersonalAccount[] = [
-  {
-    id: 1,
-    name: 'Safaricom M-Pesa',
-    institution: 'Safaricom',
-    account_type: 'mobile_money',
-    currency: 'KES',
-    balance: 42850.0,
-    is_asset: true,
-  },
-  {
-    id: 2,
-    name: 'Equity Classic Current Account',
-    institution: 'Equity Bank',
-    account_type: 'bank_checking',
-    currency: 'KES',
-    balance: 185400.0,
-    is_asset: true,
-  },
-  {
-    id: 3,
-    name: 'KCB Goal Savings',
-    institution: 'KCB Bank',
-    account_type: 'bank_savings',
-    currency: 'KES',
-    balance: 95000.0,
-    is_asset: true,
-  },
-  {
-    id: 4,
-    name: 'Stima SACCO Deposit',
-    institution: 'Stima SACCO',
-    account_type: 'sacco',
-    currency: 'KES',
-    balance: 320000.0,
-    is_asset: true,
-  },
-  {
-    id: 5,
-    name: 'CIC Money Market Fund (MMF)',
-    institution: 'CIC Asset Management',
-    account_type: 'investment',
-    currency: 'KES',
-    balance: 250000.0,
-    is_asset: true,
-  },
-];
+// Clean in-memory stores without hardcoded fixtures (seed data moved to scripts/seed-demo.ts)
+let accountsStore: PersonalAccount[] = [];
+let transactionsStore: PersonalTransaction[] = [];
+let assetsStore: PersonalAsset[] = [];
+let liabilitiesStore: PersonalLiability[] = [];
+let budgetsStore: PersonalBudget[] = [];
+let savingsGoalsStore: PersonalSavingsGoal[] = [];
 
-let transactionsStore: PersonalTransaction[] = [
-  {
-    id: 1,
-    account_id: 1,
-    account_name: 'Safaricom M-Pesa',
-    amount: 3200,
-    currency: 'KES',
-    type: 'expense',
-    date: new Date().toISOString().split('T')[0],
-    description: 'Naivas Supermarket Food Shopping',
-    category: 'Food & Groceries',
-    reference: 'QHL921KK89',
-    import_source: 'mpesa_statement',
-  },
-  {
-    id: 2,
-    account_id: 1,
-    account_name: 'Safaricom M-Pesa',
-    amount: 1500,
-    currency: 'KES',
-    type: 'expense',
-    date: new Date(Date.now() - 86400000).toISOString().split('T')[0],
-    description: 'Kenya Power Prepaid Electricity Tokens (888880)',
-    category: 'Utilities & Water (KPLC)',
-    reference: 'QHL483JJ22',
-    import_source: 'mpesa_statement',
-  },
-  {
-    id: 3,
-    account_id: 2,
-    account_name: 'Equity Classic Current Account',
-    amount: 165000,
-    currency: 'KES',
-    type: 'income',
-    date: new Date(Date.now() - 3 * 86400000).toISOString().split('T')[0],
-    description: 'Monthly Salary Credit',
-    category: 'Salary & Primary Income',
-    reference: 'EQT9821049',
-    import_source: 'bank_csv',
-  },
-  {
-    id: 4,
-    account_id: 1,
-    account_name: 'Safaricom M-Pesa',
-    amount: 2500,
-    currency: 'KES',
-    type: 'expense',
-    date: new Date(Date.now() - 4 * 86400000).toISOString().split('T')[0],
-    description: 'Safaricom Home Fibre 50Mbps Renewal',
-    category: 'Airtime & Internet (Safaricom)',
-    reference: 'QHL112OP90',
-    import_source: 'mpesa_statement',
-  },
-  {
-    id: 5,
-    account_id: 1,
-    account_name: 'Safaricom M-Pesa',
-    amount: 4500,
-    currency: 'KES',
-    type: 'expense',
-    date: new Date(Date.now() - 6 * 86400000).toISOString().split('T')[0],
-    description: 'Rubis Fuel Station Westlands',
-    category: 'Transport & Fuel (Matatu/Petrol)',
-    reference: 'QHL003MM41',
-    import_source: 'manual',
-  },
-  {
-    id: 6,
-    account_id: 2,
-    account_name: 'Equity Classic Current Account',
-    amount: 45000,
-    currency: 'KES',
-    type: 'expense',
-    date: new Date(Date.now() - 10 * 86400000).toISOString().split('T')[0],
-    description: 'Monthly House Rent Kilimani',
-    category: 'Rent & Housing',
-    reference: 'EQT8821102',
-    import_source: 'bank_csv',
-  },
-  {
-    id: 7,
-    account_id: 1,
-    account_name: 'Safaricom M-Pesa',
-    amount: 15000,
-    currency: 'KES',
-    type: 'income',
-    date: new Date(Date.now() - 12 * 86400000).toISOString().split('T')[0],
-    description: 'Software Development Freelance Gig',
-    category: 'Side Hustle & Consulting',
-    reference: 'QHK9902188',
-    import_source: 'mpesa_statement',
-  },
-  {
-    id: 8,
-    account_id: 1,
-    account_name: 'Safaricom M-Pesa',
-    amount: 10000,
-    currency: 'KES',
-    type: 'transfer',
-    date: new Date(Date.now() - 15 * 86400000).toISOString().split('T')[0],
-    description: 'Transfer to CIC MMF Investment Account',
-    category: 'Savings & MMF Deposit',
-    reference: 'QHK3310022',
-    import_source: 'manual',
-  },
-];
-
-let assetsStore: PersonalAsset[] = [
-  {
-    id: 1,
-    name: '1/8th Acre Plot in Juja (Title Deed)',
-    category: 'land',
-    estimated_value: 1650000,
-    currency: 'KES',
-    notes: 'Freehold title deed located 2km from Thika Superhighway.',
-  },
-  {
-    id: 2,
-    name: 'Subaru Forester 2.0 XT (2016)',
-    category: 'vehicle',
-    estimated_value: 1850000,
-    currency: 'KES',
-    notes: 'Insured comprehensively with Jubilee Insurance.',
-  },
-  {
-    id: 3,
-    name: 'Safaricom PLC NSE Shares (10,000 shares)',
-    category: 'investments',
-    estimated_value: 175000,
-    currency: 'KES',
-    notes: 'Held through Dyer & Blair CDSC account.',
-  },
-  {
-    id: 4,
-    name: 'Home Audio & Apple Workstation Rig',
-    category: 'valuables',
-    estimated_value: 380000,
-    currency: 'KES',
-    notes: 'MacBook Pro M2 Max and Studio Monitors.',
-  },
-];
-
-let liabilitiesStore: PersonalLiability[] = [
-  {
-    id: 1,
-    name: 'Equity Auto Asset Loan',
-    creditor: 'Equity Bank',
-    category: 'car_loan',
-    principal_amount: 1200000,
-    outstanding_balance: 640000,
-    interest_rate: 13.5,
-    monthly_payment: 34500,
-    currency: 'KES',
-    due_date: '2027-04-15',
-    notes: 'Vehicle logbook held with Equity Bank.',
-  },
-  {
-    id: 2,
-    name: 'HELB Higher Education Loan',
-    creditor: 'HELB Kenya',
-    category: 'helb',
-    principal_amount: 280000,
-    outstanding_balance: 85000,
-    interest_rate: 4.0,
-    monthly_payment: 5000,
-    currency: 'KES',
-    due_date: '2027-12-01',
-    notes: 'Direct salary check-off deduction.',
-  },
-  {
-    id: 3,
-    name: 'Stima SACCO Development Loan',
-    creditor: 'Stima SACCO',
-    category: 'sacco_loan',
-    principal_amount: 500000,
-    outstanding_balance: 220000,
-    interest_rate: 12.0,
-    monthly_payment: 16800,
-    currency: 'KES',
-    due_date: '2026-11-30',
-  },
-];
-
-let budgetsStore: PersonalBudget[] = [
-  { id: 1, category: 'Food & Groceries', monthly_limit: 25000, currency: 'KES' },
-  { id: 2, category: 'Rent & Housing', monthly_limit: 50000, currency: 'KES' },
-  { id: 3, category: 'Utilities & Water (KPLC)', monthly_limit: 6000, currency: 'KES' },
-  { id: 4, category: 'Airtime & Internet (Safaricom)', monthly_limit: 5000, currency: 'KES' },
-  { id: 5, category: 'Transport & Fuel (Matatu/Petrol)', monthly_limit: 15000, currency: 'KES' },
-  { id: 6, category: 'Entertainment & Dining', monthly_limit: 10000, currency: 'KES' },
-];
-
-let savingsGoalsStore: PersonalSavingsGoal[] = [
-  {
-    id: 1,
-    name: '6-Month Emergency Safety Fund',
-    target_amount: 300000,
-    current_amount: 185000,
-    currency: 'KES',
-    target_date: '2026-12-31',
-  },
-  {
-    id: 2,
-    name: 'Land Development & Construction Deposit',
-    target_amount: 1000000,
-    current_amount: 420000,
-    currency: 'KES',
-    target_date: '2027-08-31',
-  },
-  {
-    id: 3,
-    name: 'December Coast Holiday Vacation',
-    target_amount: 80000,
-    current_amount: 60000,
-    currency: 'KES',
-    target_date: '2026-12-15',
-  },
-];
-
-// Helper to check if DB is configured and accessible
+// Helper to check if DB is configured and accessible. Throws on error.
 export async function isDbConnected(): Promise<boolean> {
-  if (!process.env.DATABASE_URL) return false;
-  try {
-    const res = await query('SELECT 1');
-    return !!res;
-  } catch {
-    return false;
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is not defined in environment variables');
   }
+  const res = await query('SELECT 1');
+  return !!res;
 }
 
 // ----------------- ACCOUNTS -----------------
 export async function getAccounts(): Promise<PersonalAccount[]> {
-  if (process.env.DATABASE_URL) {
-    try {
-      const res = await query('SELECT * FROM accounts WHERE is_active = TRUE ORDER BY id ASC');
-      if (res && res.rows.length > 0) {
-        return res.rows.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          institution: r.institution || '',
-          account_type: r.account_type,
-          currency: r.currency || 'KES',
-          balance: parseFloat(r.current_balance || '0'),
-          is_asset: r.is_asset ?? true,
-          updated_at: r.updated_at,
-        }));
-      }
-    } catch (e) {
-      console.warn('DB query failed for accounts, using memory store:', e);
-    }
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is not defined in environment variables. Database connection is required.');
   }
-  return [...accountsStore];
+
+  const res = await query('SELECT * FROM accounts WHERE is_active = TRUE ORDER BY id ASC');
+  return res.rows.map((r: any) => ({
+    id: r.id,
+    name: r.name,
+    institution: r.institution || '',
+    account_type: r.account_type,
+    currency: r.currency || 'KES',
+    balance: parseFloat(r.current_balance || '0'),
+    is_asset: r.is_asset ?? true,
+    updated_at: r.updated_at,
+  }));
 }
 
 export async function addAccount(account: Omit<PersonalAccount, 'id'>): Promise<PersonalAccount> {
-  if (process.env.DATABASE_URL) {
-    try {
-      const res = await query(
-        `INSERT INTO accounts (user_id, name, institution, account_type, currency, current_balance, is_asset)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING *`,
-        [1, account.name, account.institution, account.account_type, account.currency || 'KES', account.balance, account.is_asset]
-      );
-      const r = res.rows[0];
-      return {
-        id: r.id,
-        name: r.name,
-        institution: r.institution,
-        account_type: r.account_type,
-        currency: r.currency,
-        balance: parseFloat(r.current_balance),
-        is_asset: r.is_asset,
-      };
-    } catch (e) {
-      console.warn('DB insert failed for account, fallback to memory:', e);
-    }
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is not defined in environment variables. Database connection is required.');
   }
 
-  const newAcc: PersonalAccount = {
-    ...account,
-    id: Date.now(),
+  const res = await query(
+    `INSERT INTO accounts (user_id, name, institution, account_type, currency, current_balance, is_asset)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [1, account.name, account.institution, account.account_type, account.currency || 'KES', account.balance, account.is_asset]
+  );
+  const r = res.rows[0];
+  return {
+    id: r.id,
+    name: r.name,
+    institution: r.institution,
+    account_type: r.account_type,
+    currency: r.currency,
+    balance: parseFloat(r.current_balance),
+    is_asset: r.is_asset,
   };
-  accountsStore.push(newAcc);
-  return newAcc;
 }
 
 // ----------------- TRANSACTIONS -----------------
@@ -593,10 +317,6 @@ export function parseMpesaStatementText(rawText: string): ParsedImportRow[] {
   const lines = rawText.split('\n');
   const results: ParsedImportRow[] = [];
 
-  // M-Pesa SMS Regex patterns
-  // Pattern 1: Receipt Confirmed. KshX,XXX.XX sent to NAME on DATE at TIME...
-  // Pattern 2: Receipt Confirmed. You have received KshX,XXX.XX from NAME on DATE...
-  // Pattern 3: CSV row: ReceiptNo, CompletionTime, Details, TransactionStatus, PaidIn, Withdrawn, Balance
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -683,7 +403,6 @@ function formatDateKenyan(raw: string): string {
   try {
     const parts = raw.split('/');
     if (parts.length === 3) {
-      // DD/MM/YY or DD/MM/YYYY
       const day = parts[0].padStart(2, '0');
       const month = parts[1].padStart(2, '0');
       let year = parts[2];
