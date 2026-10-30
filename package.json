@@ -8,6 +8,9 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "seed:demo": "tsx scripts/seed-demo.ts",
+    "migrate:up": "node-pg-migrate --ignore-pattern \"schema.sql\" up",
+    "migrate:down": "node-pg-migrate --ignore-pattern \"schema.sql\" down",
+    "test:persistence": "tsx scripts/test-persistence.ts",
     "lint": "eslint"
   },
   "dependencies": {
@@ -27,6 +30,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.1",
+    "node-pg-migrate": "^9.0.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"

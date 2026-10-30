@@ -29,20 +29,34 @@ A personal financial dashboard built with Next.js, React, and TypeScript. It tra
 Create a `.env` or `.env.local` file in the root directory and specify your PostgreSQL connection string:
 
 ```env
-DATABASE_URL=postgresql://username:password@localhost:5432/finance_dashboard
+DATABASE_URL=postgresql://postgres:postgrespassword@localhost:5433/financial_dashboard
 ```
 
 > **Note**: `DATABASE_URL` is required. The server will fail to start if this environment variable is missing.
 
-### 2. Database Setup
+### 2. Local Database with Docker Compose
 
-Apply the schema to your PostgreSQL database:
+To start a local PostgreSQL 16 database:
 
 ```bash
-psql $DATABASE_URL -f schema.sql
+docker compose up -d
 ```
 
-### 3. Optional: Seed Demo Data
+### 3. Migrations & Schema
+
+Database migrations are managed with `node-pg-migrate` under `migrations/`:
+
+```bash
+npm run migrate:up
+```
+
+Alternatively, apply the schema SQL directly:
+
+```bash
+psql $DATABASE_URL -f migrations/schema.sql
+```
+
+### 4. Optional: Seed Demo Data
 
 To populate the database with demo accounts, transactions, assets, and goals:
 
@@ -50,7 +64,15 @@ To populate the database with demo accounts, transactions, assets, and goals:
 npm run seed:demo
 ```
 
-### 4. Running the Application
+### 5. Running Tests
+
+To verify persistence, atomic transaction updates, and receipt deduplication:
+
+```bash
+npm run test:persistence
+```
+
+### 6. Running the Application
 
 Start the development server (defaults to port `3000`):
 
@@ -74,5 +96,8 @@ Visit [http://localhost:3000](http://localhost:3000) (or your chosen port) in yo
 - `npm run build`: Compiles and builds the production application.
 - `npm run start`: Starts the Next.js production server (uses `PORT`, defaults to `3000`).
 - `npm run typecheck`: Runs TypeScript compiler check (`tsc --noEmit`).
+- `npm run migrate:up`: Runs pending database migrations.
+- `npm run migrate:down`: Reverts the last migration.
+- `npm run test:persistence`: Runs integration tests against PostgreSQL verifying persistence, atomicity, and deduplication.
 - `npm run seed:demo`: Seeds initial demo fixtures into PostgreSQL.
 - `npm run lint`: Runs ESLint checks.
