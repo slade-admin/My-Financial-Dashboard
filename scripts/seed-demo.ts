@@ -259,9 +259,9 @@ async function seed() {
 
   try {
     // 0. Ensure schema exists if running for first time
-    const schemaPath = path.join(process.cwd(), 'schema.sql');
+    const schemaPath = path.join(process.cwd(), 'migrations', 'schema.sql');
     if (fs.existsSync(schemaPath)) {
-      console.log('Applying schema.sql if not applied...');
+      console.log('Applying schema from migrations/schema.sql if not applied...');
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
       await pool.query(schemaSql);
     }
@@ -293,10 +293,10 @@ async function seed() {
     for (const tx of DEMO_TRANSACTIONS) {
       const accId = createdAccountIds[tx.account_index] || createdAccountIds[0];
       await pool.query(
-        `INSERT INTO transactions (account_id, amount, currency, type, date, description, category, reference, import_source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (account_id, reference, date) DO NOTHING`,
-        [accId, tx.amount, tx.currency, tx.type, tx.date, tx.description, tx.category, tx.reference, tx.import_source]
+        `INSERT INTO transactions (user_id, account_id, amount, currency, type, date, description, category, reference, import_source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (user_id, reference) DO NOTHING`,
+        [DEMO_USER.id, accId, tx.amount, tx.currency, tx.type, tx.date, tx.description, tx.category, tx.reference, tx.import_source]
       );
     }
 

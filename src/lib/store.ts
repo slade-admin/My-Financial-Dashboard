@@ -1,96 +1,9 @@
 import { query } from './db';
+import { currentUserId } from './session';
+import * as repo from './repo';
 
-export interface PersonalAccount {
-  id: string | number;
-  name: string;
-  institution: string;
-  account_type: 'mobile_money' | 'bank_savings' | 'bank_checking' | 'sacco' | 'cash' | 'investment';
-  currency: string;
-  balance: number;
-  is_asset: boolean;
-  updated_at?: string;
-}
-
-export interface PersonalTransaction {
-  id: string | number;
-  account_id: string | number;
-  account_name?: string;
-  amount: number;
-  currency: string;
-  type: 'income' | 'expense' | 'transfer';
-  date: string; // YYYY-MM-DD
-  description: string;
-  category: string;
-  reference?: string;
-  import_source: 'manual' | 'mpesa_statement' | 'bank_csv' | 'mpesa_sms';
-}
-
-export interface PersonalAsset {
-  id: string | number;
-  name: string;
-  category: 'real_estate' | 'vehicle' | 'investments' | 'land' | 'livestock' | 'valuables' | 'other';
-  estimated_value: number;
-  currency: string;
-  notes?: string;
-  updated_at?: string;
-}
-
-export interface PersonalLiability {
-  id: string | number;
-  name: string;
-  creditor: string;
-  category: 'personal_loan' | 'mortgage' | 'car_loan' | 'helb' | 'sacco_loan' | 'mobile_loan' | 'credit_card' | 'other';
-  principal_amount: number;
-  outstanding_balance: number;
-  interest_rate?: number;
-  monthly_payment?: number;
-  currency: string;
-  due_date?: string;
-  notes?: string;
-}
-
-export interface PersonalBudget {
-  id: string | number;
-  category: string;
-  monthly_limit: number;
-  currency: string;
-}
-
-export interface PersonalSavingsGoal {
-  id: string | number;
-  name: string;
-  target_amount: number;
-  current_amount: number;
-  currency: string;
-  target_date?: string;
-}
-
-export const KENYAN_EXPENSE_CATEGORIES = [
-  { name: 'Food & Groceries', icon: '🛒', color: '#F87171' },
-  { name: 'Rent & Housing', icon: '🏠', color: '#818CF8' },
-  { name: 'Utilities & Water (KPLC)', icon: '💡', color: '#FBBF24' },
-  { name: 'Airtime & Internet (Safaricom)', icon: '📶', color: '#34D399' },
-  { name: 'Transport & Fuel (Matatu/Petrol)', icon: '⛽', color: '#60A5FA' },
-  { name: 'Family & Chamas', icon: '🤝', color: '#F472B6' },
-  { name: 'Shopping & Essentials', icon: '🛍️', color: '#A78BFA' },
-  { name: 'Healthcare & Pharmacy', icon: '🏥', color: '#FB7185' },
-  { name: 'Education & School Fees', icon: '📚', color: '#38BDF8' },
-  { name: 'Entertainment & Dining', icon: '🎬', color: '#E879F9' },
-  { name: 'Salary & Primary Income', icon: '💰', color: '#10B981' },
-  { name: 'Side Hustle & Consulting', icon: '💼', color: '#059669' },
-  { name: 'Transfers & Remittance', icon: '🔄', color: '#9CA3AF' },
-  { name: 'Savings & MMF Deposit', icon: '📈', color: '#6366F1' },
-  { name: 'Loan & Fuliza Repayment', icon: '🏛️', color: '#EF4444' },
-  { name: 'Other', icon: '📦', color: '#6B7280' },
-];
-
-// Clean in-memory stores without hardcoded fixtures (seed data moved to scripts/seed-demo.ts)
-let accountsStore: PersonalAccount[] = [];
-let transactionsStore: PersonalTransaction[] = [];
-let assetsStore: PersonalAsset[] = [];
-let liabilitiesStore: PersonalLiability[] = [];
-let budgetsStore: PersonalBudget[] = [];
-let savingsGoalsStore: PersonalSavingsGoal[] = [];
+export * from './repo/types';
+export { KENYAN_EXPENSE_CATEGORIES } from './repo/categories';
 
 // Helper to check if DB is configured and accessible. Throws on error.
 export async function isDbConnected(): Promise<boolean> {
@@ -102,208 +15,89 @@ export async function isDbConnected(): Promise<boolean> {
 }
 
 // ----------------- ACCOUNTS -----------------
-export async function getAccounts(): Promise<PersonalAccount[]> {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not defined in environment variables. Database connection is required.');
-  }
-
-  const res = await query('SELECT * FROM accounts WHERE is_active = TRUE ORDER BY id ASC');
-  return res.rows.map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    institution: r.institution || '',
-    account_type: r.account_type,
-    currency: r.currency || 'KES',
-    balance: parseFloat(r.current_balance || '0'),
-    is_asset: r.is_asset ?? true,
-    updated_at: r.updated_at,
-  }));
+export async function getAccounts(): Promise<repo.PersonalAccount[]> {
+  return repo.getAccounts(currentUserId());
 }
 
-export async function addAccount(account: Omit<PersonalAccount, 'id'>): Promise<PersonalAccount> {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not defined in environment variables. Database connection is required.');
-  }
-
-  const res = await query(
-    `INSERT INTO accounts (user_id, name, institution, account_type, currency, current_balance, is_asset)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING *`,
-    [1, account.name, account.institution, account.account_type, account.currency || 'KES', account.balance, account.is_asset]
-  );
-  const r = res.rows[0];
-  return {
-    id: r.id,
-    name: r.name,
-    institution: r.institution,
-    account_type: r.account_type,
-    currency: r.currency,
-    balance: parseFloat(r.current_balance),
-    is_asset: r.is_asset,
-  };
+export async function addAccount(
+  account: Omit<repo.PersonalAccount, 'id'>
+): Promise<repo.PersonalAccount> {
+  return repo.addAccount(currentUserId(), account);
 }
 
 // ----------------- TRANSACTIONS -----------------
-export async function getTransactions(filters?: {
-  limit?: number;
-  category?: string;
-  search?: string;
-  accountId?: string | number;
-}): Promise<PersonalTransaction[]> {
-  let list = [...transactionsStore];
-
-  if (filters?.category && filters.category !== 'All') {
-    list = list.filter((t) => t.category.toLowerCase() === filters.category!.toLowerCase());
-  }
-  if (filters?.accountId && filters.accountId !== 'All') {
-    list = list.filter((t) => String(t.account_id) === String(filters.accountId));
-  }
-  if (filters?.search) {
-    const q = filters.search.toLowerCase();
-    list = list.filter(
-      (t) =>
-        t.description.toLowerCase().includes(q) ||
-        t.category.toLowerCase().includes(q) ||
-        (t.reference && t.reference.toLowerCase().includes(q))
-    );
-  }
-
-  list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return list.slice(0, filters?.limit || 100);
+export async function getTransactions(
+  filters?: repo.TransactionFilters
+): Promise<repo.PersonalTransaction[]> {
+  return repo.getTransactions(currentUserId(), filters);
 }
 
-export async function addTransaction(tx: Omit<PersonalTransaction, 'id'>): Promise<PersonalTransaction> {
-  const newTx: PersonalTransaction = {
-    ...tx,
-    id: Date.now() + Math.floor(Math.random() * 1000),
-  };
-  transactionsStore.unshift(newTx);
+export async function addTransaction(
+  tx: Omit<repo.PersonalTransaction, 'id'>
+): Promise<repo.PersonalTransaction> {
+  const result = await repo.addTransaction(currentUserId(), tx);
+  return result.transaction;
+}
 
-  // Update account balance accordingly
-  const targetAcc = accountsStore.find((a) => String(a.id) === String(tx.account_id));
-  if (targetAcc) {
-    if (tx.type === 'income') {
-      targetAcc.balance += Number(tx.amount);
-    } else if (tx.type === 'expense') {
-      targetAcc.balance -= Number(tx.amount);
-    }
-  }
-
-  return newTx;
+export async function addTransactionWithStatus(
+  tx: Omit<repo.PersonalTransaction, 'id'>
+): Promise<repo.AddTransactionResult> {
+  return repo.addTransaction(currentUserId(), tx);
 }
 
 // ----------------- ASSETS & LIABILITIES -----------------
-export async function getAssets(): Promise<PersonalAsset[]> {
-  return [...assetsStore];
+export async function getAssets(): Promise<repo.PersonalAsset[]> {
+  return repo.getAssets(currentUserId());
 }
 
-export async function addAsset(asset: Omit<PersonalAsset, 'id'>): Promise<PersonalAsset> {
-  const newAsset: PersonalAsset = { ...asset, id: Date.now() };
-  assetsStore.push(newAsset);
-  return newAsset;
+export async function addAsset(
+  asset: Omit<repo.PersonalAsset, 'id'>
+): Promise<repo.PersonalAsset> {
+  return repo.addAsset(currentUserId(), asset);
 }
 
-export async function getLiabilities(): Promise<PersonalLiability[]> {
-  return [...liabilitiesStore];
+export async function getLiabilities(): Promise<repo.PersonalLiability[]> {
+  return repo.getLiabilities(currentUserId());
 }
 
-export async function addLiability(liability: Omit<PersonalLiability, 'id'>): Promise<PersonalLiability> {
-  const newLiab: PersonalLiability = { ...liability, id: Date.now() };
-  liabilitiesStore.push(newLiab);
-  return newLiab;
+export async function addLiability(
+  liability: Omit<repo.PersonalLiability, 'id'>
+): Promise<repo.PersonalLiability> {
+  return repo.addLiability(currentUserId(), liability);
 }
 
 // ----------------- BUDGETS & GOALS -----------------
-export async function getBudgets(): Promise<PersonalBudget[]> {
-  return [...budgetsStore];
+export async function getBudgets(): Promise<repo.PersonalBudget[]> {
+  return repo.getBudgets(currentUserId());
 }
 
-export async function getSavingsGoals(): Promise<PersonalSavingsGoal[]> {
-  return [...savingsGoalsStore];
+export async function getSavingsGoals(): Promise<repo.PersonalSavingsGoal[]> {
+  return repo.getSavingsGoals(currentUserId());
 }
 
-export async function addSavingsGoal(goal: Omit<PersonalSavingsGoal, 'id'>): Promise<PersonalSavingsGoal> {
-  const newGoal: PersonalSavingsGoal = { ...goal, id: Date.now() };
-  savingsGoalsStore.push(newGoal);
-  return newGoal;
+export async function addSavingsGoal(
+  goal: Omit<repo.PersonalSavingsGoal, 'id'>
+): Promise<repo.PersonalSavingsGoal> {
+  return repo.addSavingsGoal(currentUserId(), goal);
 }
 
-export async function updateSavingsGoal(id: string | number, amountToAdd: number): Promise<PersonalSavingsGoal | null> {
-  const g = savingsGoalsStore.find((item) => String(item.id) === String(id));
-  if (g) {
-    g.current_amount += amountToAdd;
-    return g;
-  }
-  return null;
+export async function updateSavingsGoal(
+  id: string | number,
+  amountToAdd: number
+): Promise<repo.PersonalSavingsGoal | null> {
+  return repo.updateSavingsGoal(currentUserId(), id, amountToAdd);
 }
 
-// ----------------- NET WORTH SUMMARY -----------------
-export async function getNetWorthMetrics() {
-  const accounts = await getAccounts();
-  const assets = await getAssets();
-  const liabilities = await getLiabilities();
-
-  const liquidCash = accounts
-    .filter((a) => a.is_asset)
-    .reduce((sum, a) => sum + (a.currency === 'USD' ? a.balance * 130 : a.balance), 0);
-
-  const physicalAssets = assets.reduce((sum, a) => sum + a.estimated_value, 0);
-  const totalAssets = liquidCash + physicalAssets;
-  const totalLiabilities = liabilities.reduce((sum, l) => sum + l.outstanding_balance, 0);
-  const netWorth = totalAssets - totalLiabilities;
-  const debtToAssetRatio = totalAssets > 0 ? (totalLiabilities / totalAssets) * 100 : 0;
-
-  // Monthly Cash Flow
-  const transactions = await getTransactions({ limit: 500 });
-  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const monthTxs = transactions.filter((t) => t.date.startsWith(currentMonth));
-  const monthlyIncome = monthTxs.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const monthlyExpenses = monthTxs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  const netSavings = monthlyIncome - monthlyExpenses;
-  const savingsRate = monthlyIncome > 0 ? (netSavings / monthlyIncome) * 100 : 0;
-
-  return {
-    netWorth,
-    totalAssets,
-    liquidCash,
-    physicalAssets,
-    totalLiabilities,
-    debtToAssetRatio,
-    monthlyIncome,
-    monthlyExpenses,
-    netSavings,
-    savingsRate,
-  };
+// ----------------- NET WORTH & CASH FLOW -----------------
+export async function getNetWorthMetrics(): Promise<repo.NetWorthMetrics> {
+  return repo.getNetWorthMetrics(currentUserId());
 }
 
-// ----------------- EXPENSES BY CATEGORY -----------------
-export async function getExpensesByCategory() {
-  const txs = await getTransactions({ limit: 500 });
-  const expenseTxs = txs.filter((t) => t.type === 'expense');
-
-  const catMap = new Map<string, { total: number; count: number }>();
-  for (const t of expenseTxs) {
-    const existing = catMap.get(t.category) || { total: 0, count: 0 };
-    existing.total += t.amount;
-    existing.count += 1;
-    catMap.set(t.category, existing);
-  }
-
-  const results = [];
-  for (const [category, val] of catMap.entries()) {
-    const matched = KENYAN_EXPENSE_CATEGORIES.find((c) => c.name.toLowerCase() === category.toLowerCase());
-    results.push({
-      category,
-      icon: matched?.icon || '📦',
-      color: matched?.color || '#94A3B8',
-      total_amount: val.total,
-      transaction_count: val.count,
-    });
-  }
-
-  return results.sort((a, b) => b.total_amount - a.total_amount);
+export async function getExpensesByCategory(): Promise<repo.ExpenseByCategory[]> {
+  return repo.getExpensesByCategory(currentUserId());
 }
 
+// ----------------- M-PESA & STATEMENT PARSING -----------------
 export interface ParsedImportRow {
   date: string;
   description: string;
@@ -346,7 +140,7 @@ export function parseMpesaStatementText(rawText: string): ParsedImportRow[] {
             reference: ref,
             date: dateRaw.slice(0, 10),
             description: details,
-            amount,
+            amount: repo.toMoney(amount),
             type,
             category: categorizeKenyanDescription(details),
           });
@@ -356,11 +150,13 @@ export function parseMpesaStatementText(rawText: string): ParsedImportRow[] {
     }
 
     // Try parsing SMS text
-    const smsSentMatch = trimmed.match(/([A-Z0-9]{10})\s+Confirmed\.\s+Ksh([0-9,.]+)\s+sent\s+to\s+([^on]+)\s+on\s+([0-9/]+)/i);
+    const smsSentMatch = trimmed.match(
+      /([A-Z0-9]{10})\s+Confirmed\.\s+Ksh([0-9,.]+)\s+sent\s+to\s+([^on]+)\s+on\s+([0-9/]+)/i
+    );
     if (smsSentMatch) {
       results.push({
         reference: smsSentMatch[1],
-        amount: parseFloat(smsSentMatch[2].replace(/,/g, '')),
+        amount: repo.toMoney(parseFloat(smsSentMatch[2].replace(/,/g, ''))),
         description: `Sent to ${smsSentMatch[3].trim()}`,
         type: 'expense',
         date: formatDateKenyan(smsSentMatch[4]),
@@ -369,11 +165,13 @@ export function parseMpesaStatementText(rawText: string): ParsedImportRow[] {
       continue;
     }
 
-    const smsReceivedMatch = trimmed.match(/([A-Z0-9]{10})\s+Confirmed\.\s+You\s+have\s+received\s+Ksh([0-9,.]+)\s+from\s+([^on]+)\s+on\s+([0-9/]+)/i);
+    const smsReceivedMatch = trimmed.match(
+      /([A-Z0-9]{10})\s+Confirmed\.\s+You\s+have\s+received\s+Ksh([0-9,.]+)\s+from\s+([^on]+)\s+on\s+([0-9/]+)/i
+    );
     if (smsReceivedMatch) {
       results.push({
         reference: smsReceivedMatch[1],
-        amount: parseFloat(smsReceivedMatch[2].replace(/,/g, '')),
+        amount: repo.toMoney(parseFloat(smsReceivedMatch[2].replace(/,/g, ''))),
         description: `Received from ${smsReceivedMatch[3].trim()}`,
         type: 'income',
         date: formatDateKenyan(smsReceivedMatch[4]),
@@ -382,11 +180,13 @@ export function parseMpesaStatementText(rawText: string): ParsedImportRow[] {
       continue;
     }
 
-    const paybillMatch = trimmed.match(/([A-Z0-9]{10})\s+Confirmed\.\s+Ksh([0-9,.]+)\s+paid\s+to\s+([^.]+)\./i);
+    const paybillMatch = trimmed.match(
+      /([A-Z0-9]{10})\s+Confirmed\.\s+Ksh([0-9,.]+)\s+paid\s+to\s+([^.]+)\./i
+    );
     if (paybillMatch) {
       results.push({
         reference: paybillMatch[1],
-        amount: parseFloat(paybillMatch[2].replace(/,/g, '')),
+        amount: repo.toMoney(parseFloat(paybillMatch[2].replace(/,/g, ''))),
         description: `Paid to ${paybillMatch[3].trim()}`,
         type: 'expense',
         date: new Date().toISOString().split('T')[0],
@@ -415,15 +215,55 @@ function formatDateKenyan(raw: string): string {
 
 function categorizeKenyanDescription(desc: string): string {
   const d = desc.toLowerCase();
-  if (d.includes('kplc') || d.includes('power') || d.includes('water') || d.includes('tokens')) return 'Utilities & Water (KPLC)';
-  if (d.includes('safaricom') || d.includes('airtime') || d.includes('fibre') || d.includes('bundles') || d.includes('zuku')) return 'Airtime & Internet (Safaricom)';
-  if (d.includes('naivas') || d.includes('quickmart') || d.includes('carrefour') || d.includes('groceries') || d.includes('food')) return 'Food & Groceries';
-  if (d.includes('total') || d.includes('rubis') || d.includes('shell') || d.includes('matatu') || d.includes('uber') || d.includes('bolt') || d.includes('petrol')) return 'Transport & Fuel (Matatu/Petrol)';
+  if (d.includes('kplc') || d.includes('power') || d.includes('water') || d.includes('tokens'))
+    return 'Utilities & Water (KPLC)';
+  if (
+    d.includes('safaricom') ||
+    d.includes('airtime') ||
+    d.includes('fibre') ||
+    d.includes('bundles') ||
+    d.includes('zuku')
+  )
+    return 'Airtime & Internet (Safaricom)';
+  if (
+    d.includes('naivas') ||
+    d.includes('quickmart') ||
+    d.includes('carrefour') ||
+    d.includes('groceries') ||
+    d.includes('food')
+  )
+    return 'Food & Groceries';
+  if (
+    d.includes('total') ||
+    d.includes('rubis') ||
+    d.includes('shell') ||
+    d.includes('matatu') ||
+    d.includes('uber') ||
+    d.includes('bolt') ||
+    d.includes('petrol')
+  )
+    return 'Transport & Fuel (Matatu/Petrol)';
   if (d.includes('rent') || d.includes('landlord') || d.includes('housing')) return 'Rent & Housing';
-  if (d.includes('hospital') || d.includes('pharmacy') || d.includes('chemist') || d.includes('doctor')) return 'Healthcare & Pharmacy';
-  if (d.includes('school') || d.includes('fees') || d.includes('university') || d.includes('college')) return 'Education & School Fees';
-  if (d.includes('salary') || d.includes('payroll') || d.includes('wages')) return 'Salary & Primary Income';
-  if (d.includes('mmf') || d.includes('cic') || d.includes('sanlam') || d.includes('shares') || d.includes('cdsc')) return 'Savings & MMF Deposit';
-  if (d.includes('fuliza') || d.includes('m-shwari loan') || d.includes('kcb mpesa') || d.includes('loan')) return 'Loan & Fuliza Repayment';
+  if (d.includes('hospital') || d.includes('pharmacy') || d.includes('chemist') || d.includes('doctor'))
+    return 'Healthcare & Pharmacy';
+  if (d.includes('school') || d.includes('fees') || d.includes('university') || d.includes('college'))
+    return 'Education & School Fees';
+  if (d.includes('salary') || d.includes('payroll') || d.includes('wages'))
+    return 'Salary & Primary Income';
+  if (
+    d.includes('mmf') ||
+    d.includes('cic') ||
+    d.includes('sanlam') ||
+    d.includes('shares') ||
+    d.includes('cdsc')
+  )
+    return 'Savings & MMF Deposit';
+  if (
+    d.includes('fuliza') ||
+    d.includes('m-shwari loan') ||
+    d.includes('kcb mpesa') ||
+    d.includes('loan')
+  )
+    return 'Loan & Fuliza Repayment';
   return 'Shopping & Essentials';
 }
