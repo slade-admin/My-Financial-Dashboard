@@ -16,85 +16,85 @@ export async function isDbConnected(): Promise<boolean> {
 
 // ----------------- ACCOUNTS -----------------
 export async function getAccounts(): Promise<repo.PersonalAccount[]> {
-  return repo.getAccounts(currentUserId());
+  return repo.getAccounts(await currentUserId());
 }
 
 export async function addAccount(
   account: Omit<repo.PersonalAccount, 'id'>
 ): Promise<repo.PersonalAccount> {
-  return repo.addAccount(currentUserId(), account);
+  return repo.addAccount(await currentUserId(), account);
 }
 
 // ----------------- TRANSACTIONS -----------------
 export async function getTransactions(
   filters?: repo.TransactionFilters
 ): Promise<repo.PersonalTransaction[]> {
-  return repo.getTransactions(currentUserId(), filters);
+  return repo.getTransactions(await currentUserId(), filters);
 }
 
 export async function addTransaction(
   tx: Omit<repo.PersonalTransaction, 'id'>
 ): Promise<repo.PersonalTransaction> {
-  const result = await repo.addTransaction(currentUserId(), tx);
+  const result = await repo.addTransaction(await currentUserId(), tx);
   return result.transaction;
 }
 
 export async function addTransactionWithStatus(
   tx: Omit<repo.PersonalTransaction, 'id'>
 ): Promise<repo.AddTransactionResult> {
-  return repo.addTransaction(currentUserId(), tx);
+  return repo.addTransaction(await currentUserId(), tx);
 }
 
 // ----------------- ASSETS & LIABILITIES -----------------
 export async function getAssets(): Promise<repo.PersonalAsset[]> {
-  return repo.getAssets(currentUserId());
+  return repo.getAssets(await currentUserId());
 }
 
 export async function addAsset(
   asset: Omit<repo.PersonalAsset, 'id'>
 ): Promise<repo.PersonalAsset> {
-  return repo.addAsset(currentUserId(), asset);
+  return repo.addAsset(await currentUserId(), asset);
 }
 
 export async function getLiabilities(): Promise<repo.PersonalLiability[]> {
-  return repo.getLiabilities(currentUserId());
+  return repo.getLiabilities(await currentUserId());
 }
 
 export async function addLiability(
   liability: Omit<repo.PersonalLiability, 'id'>
 ): Promise<repo.PersonalLiability> {
-  return repo.addLiability(currentUserId(), liability);
+  return repo.addLiability(await currentUserId(), liability);
 }
 
 // ----------------- BUDGETS & GOALS -----------------
 export async function getBudgets(): Promise<repo.PersonalBudget[]> {
-  return repo.getBudgets(currentUserId());
+  return repo.getBudgets(await currentUserId());
 }
 
 export async function getSavingsGoals(): Promise<repo.PersonalSavingsGoal[]> {
-  return repo.getSavingsGoals(currentUserId());
+  return repo.getSavingsGoals(await currentUserId());
 }
 
 export async function addSavingsGoal(
   goal: Omit<repo.PersonalSavingsGoal, 'id'>
 ): Promise<repo.PersonalSavingsGoal> {
-  return repo.addSavingsGoal(currentUserId(), goal);
+  return repo.addSavingsGoal(await currentUserId(), goal);
 }
 
 export async function updateSavingsGoal(
   id: string | number,
   amountToAdd: number
 ): Promise<repo.PersonalSavingsGoal | null> {
-  return repo.updateSavingsGoal(currentUserId(), id, amountToAdd);
+  return repo.updateSavingsGoal(await currentUserId(), id, amountToAdd);
 }
 
 // ----------------- NET WORTH & CASH FLOW -----------------
 export async function getNetWorthMetrics(): Promise<repo.NetWorthMetrics> {
-  return repo.getNetWorthMetrics(currentUserId());
+  return repo.getNetWorthMetrics(await currentUserId());
 }
 
 export async function getExpensesByCategory(): Promise<repo.ExpenseByCategory[]> {
-  return repo.getExpensesByCategory(currentUserId());
+  return repo.getExpensesByCategory(await currentUserId());
 }
 
 // ----------------- M-PESA & STATEMENT PARSING -----------------

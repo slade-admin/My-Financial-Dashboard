@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAssets, addAsset, getLiabilities, addLiability } from '@/lib/store';
+import { apiError } from '@/lib/errors';
 
 export async function GET() {
   try {
     const [assets, liabilities] = await Promise.all([getAssets(), getLiabilities()]);
     return NextResponse.json({ assets, liabilities });
-  } catch (error: any) {
-    console.error('Error fetching assets/liabilities:', error);
-    return NextResponse.json({ error: error.message || 'Failed to fetch' }, { status: 500 });
+  } catch (error) {
+    return apiError(error, 'GET /api/assets-liabilities');
   }
 }
 
@@ -44,8 +44,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ error: 'Invalid kind. Must be asset or liability' }, { status: 400 });
-  } catch (error: any) {
-    console.error('Error adding asset/liability:', error);
-    return NextResponse.json({ error: error.message || 'Failed to save' }, { status: 500 });
+  } catch (error) {
+    return apiError(error, 'POST /api/assets-liabilities');
   }
 }

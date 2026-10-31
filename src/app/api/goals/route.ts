@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSavingsGoals, addSavingsGoal, updateSavingsGoal, getBudgets } from '@/lib/store';
+import { apiError } from '@/lib/errors';
 
 export async function GET() {
   try {
     const [goals, budgets] = await Promise.all([getSavingsGoals(), getBudgets()]);
     return NextResponse.json({ goals, budgets });
-  } catch (error: any) {
-    console.error('Error fetching goals/budgets:', error);
-    return NextResponse.json({ error: error.message || 'Failed to fetch goals' }, { status: 500 });
+  } catch (error) {
+    return apiError(error, 'GET /api/goals');
   }
 }
 
@@ -32,8 +32,7 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({ success: true, goal: newGoal });
-  } catch (error: any) {
-    console.error('Error with goals endpoint:', error);
-    return NextResponse.json({ error: error.message || 'Failed to process' }, { status: 500 });
+  } catch (error) {
+    return apiError(error, 'POST /api/goals');
   }
 }

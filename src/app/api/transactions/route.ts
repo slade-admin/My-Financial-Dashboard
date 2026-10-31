@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTransactions, addTransaction, getAccounts, addAccount } from '@/lib/store';
+import { apiError } from '@/lib/errors';
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,9 +19,8 @@ export async function GET(request: NextRequest) {
 
     const transactions = await getTransactions({ limit, category, search, accountId });
     return NextResponse.json({ transactions });
-  } catch (error: any) {
-    console.error('Error fetching transactions:', error);
-    return NextResponse.json({ error: error.message || 'Failed to fetch transactions' }, { status: 500 });
+  } catch (error) {
+    return apiError(error, 'GET /api/transactions');
   }
 }
 
@@ -59,8 +59,7 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({ success: true, transaction: newTx });
-  } catch (error: any) {
-    console.error('Error adding transaction:', error);
-    return NextResponse.json({ error: error.message || 'Failed to save transaction' }, { status: 500 });
+  } catch (error) {
+    return apiError(error, 'POST /api/transactions');
   }
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseMpesaStatementText, addTransaction, getAccounts } from '@/lib/store';
+import { apiError } from '@/lib/errors';
 
 export async function POST(request: NextRequest) {
   try {
@@ -51,8 +52,7 @@ export async function POST(request: NextRequest) {
       accountName: targetAccount.name,
       transactions: imported,
     });
-  } catch (error: any) {
-    console.error('Error importing statement:', error);
-    return NextResponse.json({ error: error.message || 'Failed to import statement' }, { status: 500 });
+  } catch (error) {
+    return apiError(error, 'POST /api/import/statement');
   }
 }
