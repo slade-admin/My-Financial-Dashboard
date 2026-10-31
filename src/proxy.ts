@@ -19,12 +19,18 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { SESSION_COOKIE } from '@/lib/session';
 
-// Public API endpoints — do NOT require session cookie
+// Endpoints that do NOT require a session cookie.
+//
+// /api/ingest/* is called by the phone-side SMS forwarder, which has no
+// browser session. It is NOT unauthenticated: the route itself requires a
+// bearer ingest token (see src/app/api/ingest/sms/route.ts). Listing it here
+// only means "the cookie check does not apply".
 const PUBLIC_API_PREFIXES = [
   '/api/auth/login',
   '/api/auth/signup',
   '/api/auth/logout',
   '/api/auth/me',
+  '/api/ingest/',
 ];
 
 // Public pages
