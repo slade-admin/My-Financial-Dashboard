@@ -29,8 +29,13 @@ async function timeIt(fn: () => Promise<unknown>): Promise<number> {
 }
 
 async function main() {
+  // Same dev-only default as scripts/test-persistence.ts. Announced rather
+  // than silent, so it is obvious which database the assertions ran against.
   process.env.DATABASE_URL ||=
     'postgresql://postgres:postgrespassword@localhost:5433/financial_dashboard';
+  console.log(
+    `[ingest-token test] database: ${process.env.DATABASE_URL.replace(/:[^:@]*@/, ':****@')}\n`,
+  );
 
   const pool = getPool();
   const created: number[] = [];
