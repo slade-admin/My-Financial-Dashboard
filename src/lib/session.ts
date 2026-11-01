@@ -4,7 +4,7 @@
  * Phase 2: Real server-side session resolution.
  *
  * Session token is stored as an httpOnly, Secure, SameSite=Lax cookie named
- * "hisa_session". Its value is the raw 64-char hex token stored in the
+ * "tracksuite_session". Its value is the raw 64-char hex token stored in the
  * `sessions` table (not hashed — the session ID itself is unguessable,
  * 256 bits of randomness).
  *
@@ -17,7 +17,10 @@ import { validateSession } from '@/lib/repo/auth';
 import type { UserRow } from '@/lib/repo/auth';
 import { UnauthorizedError } from '@/lib/errors';
 
-export const SESSION_COOKIE = 'hisa_session';
+// Renamed from 'hisa_session' with the HisaKenya -> Track-suite rebrand.
+// Anyone holding the old cookie is simply treated as signed out and logs in
+// again; the old rows stay in `sessions` until they expire.
+export const SESSION_COOKIE = 'tracksuite_session';
 
 export const COOKIE_OPTIONS = {
   httpOnly: true,

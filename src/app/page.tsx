@@ -518,7 +518,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-                HisaKenya <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">MVP Personal Wealth</span>
+                Track-suite <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">MVP Personal Wealth</span>
               </h1>
               <p className="text-xs text-slate-400">Personal Net Worth, M-Pesa & Cash Flow Tracker</p>
             </div>

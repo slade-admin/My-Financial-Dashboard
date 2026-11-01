@@ -56,7 +56,7 @@ function LoginForm() {
         {/* Logo & heading */}
         <div className="login-logo">
           <span className="logo-icon">📊</span>
-          <h1 className="logo-title">HisaKenya</h1>
+          <h1 className="logo-title">Track-suite</h1>
           <p className="logo-subtitle">Personal Wealth Dashboard</p>
         </div>
 
