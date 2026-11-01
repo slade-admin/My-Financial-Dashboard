@@ -1,4 +1,4 @@
-# Track-suite Personal Wealth Dashboard
+# Track-suite 
 
 A personal financial dashboard built with Next.js, React, and TypeScript. It tracks personal accounts, transactions, assets, liabilities, monthly budgets, and savings goals, and supports importing transactions from M-Pesa statements and SMS messages.
 
