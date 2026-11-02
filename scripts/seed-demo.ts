@@ -1,6 +1,25 @@
+/**
+ * scripts/seed-demo.ts  —  npm run seed:demo [-- --email=you@example.com]
+ *
+ * By default this seeds a standalone demo user that has no password_hash and
+ * therefore cannot be logged into. Since Phase 2 added real authentication
+ * that data is invisible in the UI: you sign in as yourself and see an empty
+ * dashboard while the demo rows sit under a login-less row.
+ *
+ * Pass --email (or --user-id) to attach the demo data to an account you can
+ * actually sign in as:
+ *
+ *   npm run seed:demo -- --email=you@example.com
+ *
+ * Re-running is safe. Every insert is keyed on something natural (account
+ * name, budget category, transaction reference), so a second run tops up what
+ * is missing instead of duplicating. Nothing is ever deleted, so pointing this
+ * at a real account cannot destroy real data.
+ */
 import fs from 'fs';
 import path from 'path';
 import { Pool } from 'pg';
+import { loadLocalEnv, maskUrl } from './load-env';
 
 export const DEMO_USER = {
   id: 1,
@@ -246,15 +265,100 @@ export const DEMO_SAVINGS_GOALS = [
   },
 ];
 
-async function seed() {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error('ERROR: DATABASE_URL environment variable is required to seed demo data.');
-    console.error('Example: DATABASE_URL="postgresql://user:pass@localhost:5432/finance_dashboard" npm run seed:demo');
-    process.exit(1);
+/** Read --flag=value / --flag value from argv. */
+function arg(name: string): string | undefined {
+  const argv = process.argv.slice(2);
+  const eq = argv.find((a) => a.startsWith(`--${name}=`));
+  if (eq) return eq.slice(name.length + 3);
+  const i = argv.indexOf(`--${name}`);
+  if (i !== -1 && argv[i + 1] && !argv[i + 1].startsWith('--')) return argv[i + 1];
+  return undefined;
+}
+
+/**
+ * Decide which user the demo data belongs to.
+ *  --user-id=N  use that id, must already exist
+ *  --email=X    use that account, must already exist (so a typo cannot
+ *               silently create a second login-less user)
+ *  neither      the built-in demo user, created if absent
+ */
+async function resolveTargetUser(pool: Pool): Promise<{ id: number; label: string }> {
+  const wantId = arg('user-id');
+  const wantEmail = arg('email');
+
+  if (wantId && wantEmail) {
+    throw new Error('Pass either --user-id or --email, not both.');
   }
 
-  console.log('Connecting to database...');
+  if (wantId) {
+    const n = Number(wantId);
+    if (!Number.isInteger(n) || n <= 0) throw new Error(`--user-id must be a positive integer, got "${wantId}"`);
+    const r = await pool.query<{ id: number; email: string }>('SELECT id, email FROM users WHERE id = $1', [n]);
+    if (r.rows.length === 0) throw new Error(`No user with id ${n}. Sign up in the app first.`);
+    return { id: r.rows[0].id, label: `${r.rows[0].email} (id ${r.rows[0].id})` };
+  }
+
+  if (wantEmail) {
+    const r = await pool.query<{ id: number; email: string }>(
+      'SELECT id, email FROM users WHERE email = $1',
+      [wantEmail.toLowerCase().trim()],
+    );
+    if (r.rows.length === 0) {
+      throw new Error(
+        `No user with email "${wantEmail}". Sign up at /signup first, then re-run.`,
+      );
+    }
+    return { id: r.rows[0].id, label: `${r.rows[0].email} (id ${r.rows[0].id})` };
+  }
+
+  await pool.query(
+    `INSERT INTO users (id, email, full_name, phone_number, country)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id) DO NOTHING`,
+    [DEMO_USER.id, DEMO_USER.email, DEMO_USER.full_name, DEMO_USER.phone_number, DEMO_USER.country],
+  );
+  return { id: DEMO_USER.id, label: `${DEMO_USER.email} (id ${DEMO_USER.id}, cannot log in)` };
+}
+
+/**
+ * Insert only if no row for this user already matches on `keyCol`.
+ * Used instead of ON CONFLICT because these tables have no unique constraint
+ * on their natural key, and adding one would be a schema change that could
+ * fail against existing duplicate rows.
+ */
+async function insertIfAbsent(
+  pool: Pool,
+  table: string,
+  userId: number,
+  keyCol: string,
+  keyVal: string,
+  cols: string[],
+  vals: unknown[],
+): Promise<boolean> {
+  const existing = await pool.query(
+    `SELECT 1 FROM ${table} WHERE user_id = $1 AND ${keyCol} = $2 LIMIT 1`,
+    [userId, keyVal],
+  );
+  if ((existing.rowCount ?? 0) > 0) return false;
+
+  const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+  await pool.query(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`, vals);
+  return true;
+}
+
+async function seed() {
+  // .env.local is not read automatically by tsx the way `next dev` reads it.
+  const loaded = loadLocalEnv();
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error('ERROR: DATABASE_URL is required to seed demo data.');
+    console.error('Set it in .env.local, or pass it inline:');
+    console.error('  DATABASE_URL="postgresql://user:pass@host:5432/db" npm run seed:demo');
+    process.exit(1);
+  }
+  if (loaded.length) console.log(`Loaded env from ${loaded.join(', ')}`);
+  console.log(`Connecting to ${maskUrl(databaseUrl)}`);
+
   const pool = new Pool({ connectionString: databaseUrl });
 
   try {
@@ -266,95 +370,96 @@ async function seed() {
       await pool.query(schemaSql);
     }
 
-    // 1. Seed user
-    console.log('Seeding demo user...');
-    await pool.query(
-      `INSERT INTO users (id, email, full_name, phone_number, country)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO NOTHING`,
-      [DEMO_USER.id, DEMO_USER.email, DEMO_USER.full_name, DEMO_USER.phone_number, DEMO_USER.country]
-    );
+    // 1. Resolve which user owns this data
+    const target = await resolveTargetUser(pool);
+    console.log(`Seeding demo data for ${target.label}`);
+    const uid = target.id;
+    const added = { accounts: 0, transactions: 0, assets: 0, liabilities: 0, budgets: 0, goals: 0 };
 
-    // 2. Seed accounts
+    // 2. Accounts (keyed on name)
     console.log('Seeding accounts...');
-    const createdAccountIds: number[] = [];
+    const accountIds: number[] = [];
     for (const acc of DEMO_ACCOUNTS) {
-      const res = await pool.query(
+      const found = await pool.query<{ id: number }>(
+        'SELECT id FROM accounts WHERE user_id = $1 AND name = $2 LIMIT 1',
+        [uid, acc.name],
+      );
+      if (found.rows.length > 0) {
+        accountIds.push(found.rows[0].id);
+        continue;
+      }
+      const res = await pool.query<{ id: number }>(
         `INSERT INTO accounts (user_id, name, institution, account_type, currency, current_balance, is_asset)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id`,
-        [DEMO_USER.id, acc.name, acc.institution, acc.account_type, acc.currency, acc.balance, acc.is_asset]
+        [uid, acc.name, acc.institution, acc.account_type, acc.currency, acc.balance, acc.is_asset],
       );
-      createdAccountIds.push(res.rows[0].id);
+      accountIds.push(res.rows[0].id);
+      added.accounts++;
     }
 
-    // 3. Seed transactions
+    // 3. Transactions (keyed on reference by the UNIQUE (user_id, reference) constraint)
     console.log('Seeding transactions...');
     for (const tx of DEMO_TRANSACTIONS) {
-      const accId = createdAccountIds[tx.account_index] || createdAccountIds[0];
-      await pool.query(
+      const accId = accountIds[tx.account_index] ?? accountIds[0];
+      const r = await pool.query(
         `INSERT INTO transactions (user_id, account_id, amount, currency, type, date, description, category, reference, import_source)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (user_id, reference) DO NOTHING`,
-        [DEMO_USER.id, accId, tx.amount, tx.currency, tx.type, tx.date, tx.description, tx.category, tx.reference, tx.import_source]
+        [uid, accId, tx.amount, tx.currency, tx.type, tx.date, tx.description, tx.category, tx.reference, tx.import_source],
       );
+      added.transactions += r.rowCount ?? 0;
     }
 
-    // 4. Seed assets
+    // 4. Assets (keyed on name)
     console.log('Seeding assets...');
-    for (const asset of DEMO_ASSETS) {
-      await pool.query(
-        `INSERT INTO assets (user_id, name, category, estimated_value, currency, notes)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [DEMO_USER.id, asset.name, asset.category, asset.estimated_value, asset.currency, asset.notes]
-      );
+    for (const a of DEMO_ASSETS) {
+      if (await insertIfAbsent(pool, 'assets', uid, 'name', a.name,
+        ['user_id', 'name', 'category', 'estimated_value', 'currency', 'notes'],
+        [uid, a.name, a.category, a.estimated_value, a.currency, a.notes])) added.assets++;
     }
 
-    // 5. Seed liabilities
+    // 5. Liabilities (keyed on name)
     console.log('Seeding liabilities...');
-    for (const liab of DEMO_LIABILITIES) {
-      await pool.query(
-        `INSERT INTO liabilities (user_id, name, creditor, category, principal_amount, outstanding_balance, interest_rate, monthly_payment, currency, due_date, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [
-          DEMO_USER.id,
-          liab.name,
-          liab.creditor,
-          liab.category,
-          liab.principal_amount,
-          liab.outstanding_balance,
-          liab.interest_rate,
-          liab.monthly_payment,
-          liab.currency,
-          liab.due_date,
-          liab.notes || null,
-        ]
-      );
+    for (const l of DEMO_LIABILITIES) {
+      if (await insertIfAbsent(pool, 'liabilities', uid, 'name', l.name,
+        ['user_id', 'name', 'creditor', 'category', 'principal_amount', 'outstanding_balance', 'interest_rate', 'monthly_payment', 'currency', 'due_date', 'notes'],
+        [uid, l.name, l.creditor, l.category, l.principal_amount, l.outstanding_balance, l.interest_rate, l.monthly_payment, l.currency, l.due_date, l.notes || null])) added.liabilities++;
     }
 
-    // 6. Seed budgets
+    // 6. Budgets (keyed on category)
     console.log('Seeding budgets...');
     for (const b of DEMO_BUDGETS) {
-      await pool.query(
-        `INSERT INTO budgets (user_id, category, monthly_limit, currency)
-         VALUES ($1, $2, $3, $4)`,
-        [DEMO_USER.id, b.category, b.monthly_limit, b.currency]
-      );
+      if (await insertIfAbsent(pool, 'budgets', uid, 'category', b.category,
+        ['user_id', 'category', 'monthly_limit', 'currency'],
+        [uid, b.category, b.monthly_limit, b.currency])) added.budgets++;
     }
 
-    // 7. Seed savings goals
+    // 7. Savings goals (keyed on name)
     console.log('Seeding savings goals...');
     for (const g of DEMO_SAVINGS_GOALS) {
-      await pool.query(
-        `INSERT INTO savings_goals (user_id, name, target_amount, current_amount, currency, target_date)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [DEMO_USER.id, g.name, g.target_amount, g.current_amount, g.currency, g.target_date]
-      );
+      if (await insertIfAbsent(pool, 'savings_goals', uid, 'name', g.name,
+        ['user_id', 'name', 'target_amount', 'current_amount', 'currency', 'target_date'],
+        [uid, g.name, g.target_amount, g.current_amount, g.currency, g.target_date])) added.goals++;
     }
 
+    console.log(
+      `
+Inserted: ${added.accounts} accounts, ${added.transactions} transactions, ` +
+      `${added.assets} assets, ${added.liabilities} liabilities, ${added.budgets} budgets, ` +
+      `${added.goals} savings goals. (0 means it already existed - re-running is a no-op.)`,
+    );
     console.log('Demo data successfully seeded!');
   } catch (err) {
-    console.error('Failed to seed demo data:', err);
+    // Operator mistakes (unknown --email, bad --user-id) get a plain message;
+    // a stack trace there is noise that buries the instruction to fix it.
+    // Anything unexpected still prints in full so it can be debugged.
+    const expected = err instanceof Error && /^(No user |--user-id |Pass either )/.test(err.message);
+    if (expected) {
+      console.error(`\nERROR: ${(err as Error).message}`);
+    } else {
+      console.error('Failed to seed demo data:', err);
+    }
     process.exit(1);
   } finally {
     await pool.end();

@@ -8,14 +8,19 @@ import { addLiability, getLiabilities } from '../src/lib/repo/liabilities';
 import { addBudget, getBudgets } from '../src/lib/repo/budgets';
 import { addSavingsGoal, updateSavingsGoal, getSavingsGoals } from '../src/lib/repo/savings-goals';
 import { getNetWorthMetrics } from '../src/lib/repo/networth';
+import { loadLocalEnv, maskUrl } from './load-env';
 
 async function runTests() {
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    'postgresql://postgres:postgrespassword@localhost:5433/financial_dashboard';
-
-  process.env.DATABASE_URL = databaseUrl;
-  console.log(`[Phase 1 Test] Connecting to PostgreSQL at: ${databaseUrl.replace(/:[^:@]*@/, ':****@')}`);
+  // .env.local is not auto-loaded for tsx scripts the way `next dev` loads it.
+  // The hardcoded fallback connection string that used to live here was a
+  // silent fallback of exactly the kind Phase 0 removed.
+  loadLocalEnv();
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error('ERROR: DATABASE_URL is required. Set it in .env.local or pass it inline.');
+    process.exit(1);
+  }
+  console.log(`[Phase 1 Test] Connecting to PostgreSQL at: ${maskUrl(databaseUrl)}`);
 
   const pool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
 

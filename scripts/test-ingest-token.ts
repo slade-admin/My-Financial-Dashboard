@@ -15,6 +15,7 @@ import {
   deleteIngestToken,
 } from '../src/lib/repo/auth';
 import { getPool } from '../src/lib/db';
+import { loadLocalEnv, maskUrl } from './load-env';
 
 const USER_ID = 1; // seed user
 
@@ -29,13 +30,14 @@ async function timeIt(fn: () => Promise<unknown>): Promise<number> {
 }
 
 async function main() {
-  // Same dev-only default as scripts/test-persistence.ts. Announced rather
-  // than silent, so it is obvious which database the assertions ran against.
-  process.env.DATABASE_URL ||=
-    'postgresql://postgres:postgrespassword@localhost:5433/financial_dashboard';
-  console.log(
-    `[ingest-token test] database: ${process.env.DATABASE_URL.replace(/:[^:@]*@/, ':****@')}\n`,
-  );
+  // .env.local is not auto-loaded for tsx scripts the way `next dev` loads it.
+  loadLocalEnv();
+  if (!process.env.DATABASE_URL) {
+    console.error('ERROR: DATABASE_URL is required. Set it in .env.local or pass it inline.');
+    process.exit(1);
+  }
+  console.log(`[ingest-token test] database: ${maskUrl(process.env.DATABASE_URL)}
+`);
 
   const pool = getPool();
   const created: number[] = [];
