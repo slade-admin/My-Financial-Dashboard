@@ -20,7 +20,9 @@ export interface PersonalTransaction {
   description: string;
   category: string;
   reference?: string;
-  import_source: 'manual' | 'mpesa_statement' | 'bank_csv' | 'mpesa_sms';
+  // 'bank_sms' added in Phase 3 for forwarded bank alerts. The column is a
+  // plain VARCHAR(50) with no CHECK constraint, so no migration is needed.
+  import_source: 'manual' | 'mpesa_statement' | 'bank_csv' | 'mpesa_sms' | 'bank_sms';
 }
 
 export interface AddTransactionResult {

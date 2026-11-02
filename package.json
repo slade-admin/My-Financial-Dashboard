@@ -13,7 +13,8 @@
     "test:persistence": "tsx scripts/test-persistence.ts",
     "test:ingest-token": "tsx scripts/test-ingest-token.ts",
     "lint": "eslint",
-    "test:dates": "tsx scripts/test-dates.ts"
+    "test:dates": "tsx scripts/test-dates.ts",
+    "test:sms": "tsx scripts/test-sms.ts"
   },
   "dependencies": {
     "argon2": "^0.45.1",
