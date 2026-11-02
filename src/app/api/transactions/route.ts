@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTransactions, addTransaction, getAccounts, addAccount } from '@/lib/store';
 import { apiError } from '@/lib/errors';
+import { todayLocal } from '@/lib/repo/types';
 
 export async function GET(request: NextRequest) {
   try {
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
       amount: Math.abs(Number(amount)),
       currency: body.currency || 'KES',
       type: type || 'expense',
-      date: date || new Date().toISOString().split('T')[0],
+      date: date || todayLocal(),
       description,
       category: category || 'Other',
       reference: reference || `TXN${Date.now().toString().slice(-6)}`,

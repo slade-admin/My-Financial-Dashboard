@@ -4,6 +4,7 @@ import {
   TransactionFilters,
   AddTransactionResult,
   toMoney,
+  toDateString, DbRow
 } from './types';
 
 export async function getTransactions(
@@ -11,7 +12,7 @@ export async function getTransactions(
   filters?: TransactionFilters
 ): Promise<PersonalTransaction[]> {
   const conditions: string[] = ['t.user_id = $1'];
-  const params: any[] = [userId];
+  const params: unknown[] = [userId];
   let paramIdx = 2;
 
   if (filters?.category && filters.category !== 'All') {
@@ -169,13 +170,12 @@ export async function addTransaction(
   }
 }
 
-function mapTransactionRow(r: any): PersonalTransaction {
-  let dateStr = r.date;
-  if (r.date instanceof Date) {
-    dateStr = r.date.toISOString().split('T')[0];
-  } else if (typeof r.date === 'string') {
-    dateStr = r.date.slice(0, 10);
-  }
+function mapTransactionRow(r: DbRow): PersonalTransaction {
+  // transactions.date is NOT NULL in the schema, so this is always present.
+  // Throwing rather than defaulting to today: a missing date means the row is
+  // corrupt, and silently inventing one would hide that.
+  const dateStr = toDateString(r.date);
+  if (!dateStr) throw new Error(`Transaction ${r.id} has no date`);
 
   return {
     id: r.id,

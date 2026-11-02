@@ -1,5 +1,5 @@
 import { query } from '../db';
-import { PersonalSavingsGoal, toMoney } from './types';
+import { PersonalSavingsGoal, toMoney, toDateString, DbRow} from './types';
 
 export async function getSavingsGoals(userId: number): Promise<PersonalSavingsGoal[]> {
   const res = await query(
@@ -47,13 +47,8 @@ export async function updateSavingsGoal(
   return mapGoalRow(res.rows[0]);
 }
 
-function mapGoalRow(r: any): PersonalSavingsGoal {
-  let targetDateStr = r.target_date;
-  if (r.target_date instanceof Date) {
-    targetDateStr = r.target_date.toISOString().split('T')[0];
-  } else if (typeof r.target_date === 'string') {
-    targetDateStr = r.target_date.slice(0, 10);
-  }
+function mapGoalRow(r: DbRow): PersonalSavingsGoal {
+  const targetDateStr = toDateString(r.target_date);
 
   return {
     id: r.id,

@@ -1,5 +1,5 @@
 import { query } from '../db';
-import { PersonalAccount, toMoney } from './types';
+import { PersonalAccount, toMoney, DbRow} from './types';
 
 export async function getAccounts(userId: number): Promise<PersonalAccount[]> {
   const res = await query(
@@ -42,7 +42,7 @@ export async function addAccount(
   return mapAccountRow(res.rows[0]);
 }
 
-function mapAccountRow(r: any): PersonalAccount {
+function mapAccountRow(r: DbRow): PersonalAccount {
   return {
     id: r.id,
     name: r.name,

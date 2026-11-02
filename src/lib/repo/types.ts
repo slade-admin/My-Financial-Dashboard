@@ -112,3 +112,43 @@ export function toMoney(val: number | string | null | undefined): number {
   if (isNaN(num)) return 0;
   return Math.round((num + Number.EPSILON) * 100) / 100;
 }
+
+/**
+ * Normalise a DATE column to 'YYYY-MM-DD'.
+ *
+ * db.ts registers a type parser so DATE arrives as a string already, which is
+ * the fast path here. The Date branch stays as a safety net and deliberately
+ * reads LOCAL components rather than calling toISOString(): node-pg builds the
+ * Date at local midnight, so converting it to a UTC instant shifts the
+ * calendar date back a day in any timezone ahead of UTC (EAT included).
+ */
+export function toDateString(
+  val: string | Date | null | undefined,
+): string | undefined {
+  if (val === null || val === undefined) return undefined;
+  if (typeof val === 'string') return val.slice(0, 10);
+  if (val instanceof Date) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return undefined;
+}
+
+/** Today's calendar date in local time as 'YYYY-MM-DD'. */
+export function todayLocal(now: Date = new Date()): string {
+  return toDateString(now)!;
+}
+
+/**
+ * A raw result row from pg.
+ *
+ * Rows are dynamically typed: the driver returns whatever the query selected,
+ * and column types are not known to TypeScript. Declaring this once, with the
+ * single suppression it needs, is honest about that and replaces the `r: any`
+ * that was repeated across every mapper. The fuller fix is a hand-written
+ * interface per table, which is a larger change than this one is worth today.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type DbRow = Record<string, any>;

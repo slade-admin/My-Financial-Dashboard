@@ -3,7 +3,7 @@ import { getAssets } from './assets';
 import { getLiabilities } from './liabilities';
 import { getTransactions } from './transactions';
 import { KENYAN_EXPENSE_CATEGORIES } from './categories';
-import { NetWorthMetrics, ExpenseByCategory, toMoney } from './types';
+import { NetWorthMetrics, ExpenseByCategory, toMoney, todayLocal } from './types';
 
 export async function getNetWorthMetrics(userId: number): Promise<NetWorthMetrics> {
   const [accounts, assets, liabilities, transactions] = await Promise.all([
@@ -41,7 +41,10 @@ export async function getNetWorthMetrics(userId: number): Promise<NetWorthMetric
       : 0;
 
   // Monthly Cash Flow in Africa/Nairobi time
-  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+  // Local, not UTC: in EAT (UTC+3) the first ~3 hours of a new month still
+  // read as the previous month in UTC, which would attribute that window's
+  // spending to the wrong month.
+  const currentMonth = todayLocal().slice(0, 7); // YYYY-MM
   const monthTxs = transactions.filter((t) => t.date.startsWith(currentMonth));
 
   const monthlyIncome = toMoney(

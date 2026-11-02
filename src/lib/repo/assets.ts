@@ -1,5 +1,5 @@
 import { query } from '../db';
-import { PersonalAsset, toMoney } from './types';
+import { PersonalAsset, toMoney, DbRow} from './types';
 
 export async function getAssets(userId: number): Promise<PersonalAsset[]> {
   const res = await query(
@@ -29,7 +29,7 @@ export async function addAsset(
   return mapAssetRow(res.rows[0]);
 }
 
-function mapAssetRow(r: any): PersonalAsset {
+function mapAssetRow(r: DbRow): PersonalAsset {
   return {
     id: r.id,
     name: r.name,

@@ -1,5 +1,5 @@
 import { query } from '../db';
-import { Category } from './types';
+import { Category, DbRow} from './types';
 
 export const KENYAN_EXPENSE_CATEGORIES: Category[] = [
   { name: 'Food & Groceries', icon: '🛒', color: '#F87171' },
@@ -24,7 +24,7 @@ export async function getCategories(): Promise<Category[]> {
   try {
     const res = await query('SELECT * FROM categories ORDER BY id ASC');
     if (res.rows.length > 0) {
-      return res.rows.map((r: any) => ({
+      return res.rows.map((r: DbRow) => ({
         id: r.id,
         name: r.name,
         icon: r.icon || '📦',

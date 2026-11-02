@@ -1,5 +1,5 @@
 import { query } from '../db';
-import { PersonalBudget, toMoney } from './types';
+import { PersonalBudget, toMoney, DbRow} from './types';
 
 export async function getBudgets(userId: number): Promise<PersonalBudget[]> {
   const res = await query(
@@ -22,7 +22,7 @@ export async function addBudget(
   return mapBudgetRow(res.rows[0]);
 }
 
-function mapBudgetRow(r: any): PersonalBudget {
+function mapBudgetRow(r: DbRow): PersonalBudget {
   return {
     id: r.id,
     category: r.category,

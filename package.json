@@ -12,10 +12,10 @@
     "migrate:down": "node-pg-migrate --ignore-pattern \"schema.sql\" down",
     "test:persistence": "tsx scripts/test-persistence.ts",
     "test:ingest-token": "tsx scripts/test-ingest-token.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:dates": "tsx scripts/test-dates.ts"
   },
   "dependencies": {
-    "@prisma/client": "^7.10.0",
     "argon2": "^0.45.1",
     "next": "16.4.1",
     "pg": "^8.23.1",

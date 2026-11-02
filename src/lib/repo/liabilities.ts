@@ -1,5 +1,5 @@
 import { query } from '../db';
-import { PersonalLiability, toMoney } from './types';
+import { PersonalLiability, toMoney, toDateString, DbRow} from './types';
 
 export async function getLiabilities(userId: number): Promise<PersonalLiability[]> {
   const res = await query(
@@ -34,13 +34,8 @@ export async function addLiability(
   return mapLiabilityRow(res.rows[0]);
 }
 
-function mapLiabilityRow(r: any): PersonalLiability {
-  let dueDateStr = r.due_date;
-  if (r.due_date instanceof Date) {
-    dueDateStr = r.due_date.toISOString().split('T')[0];
-  } else if (typeof r.due_date === 'string') {
-    dueDateStr = r.due_date.slice(0, 10);
-  }
+function mapLiabilityRow(r: DbRow): PersonalLiability {
+  const dueDateStr = toDateString(r.due_date);
 
   return {
     id: r.id,
