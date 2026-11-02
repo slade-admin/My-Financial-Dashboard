@@ -1,17 +1,12 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   PieChart,
   Pie,
   Cell,
   ResponsiveContainer,
   Tooltip,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
 } from 'recharts';
 
 interface PersonalAccount {
@@ -91,6 +86,17 @@ interface NetWorthMetrics {
   isDatabaseConnected?: boolean;
 }
 
+interface ExpenseSummary {
+  category: string;
+  icon: string;
+  color: string;
+  total_amount: number;
+  transaction_count: number;
+}
+
+type TransactionType = PersonalTransaction['type'];
+type DashboardTab = 'overview' | 'accounts' | 'transactions' | 'import' | 'networth' | 'goals';
+
 // Format Kenyan Shilling
 const formatKES = (val: number | string) => {
   const num = typeof val === 'number' ? val : parseFloat(String(val) || '0');
@@ -124,11 +130,11 @@ const CATEGORIES_LIST = [
 ];
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'accounts' | 'transactions' | 'import' | 'networth' | 'goals'>('overview');
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [metrics, setMetrics] = useState<NetWorthMetrics | null>(null);
   const [accounts, setAccounts] = useState<PersonalAccount[]>([]);
   const [transactions, setTransactions] = useState<PersonalTransaction[]>([]);
-  const [expenses, setExpenses] = useState<any[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseSummary[]>([]);
   const [assets, setAssets] = useState<PersonalAsset[]>([]);
   const [liabilities, setLiabilities] = useState<PersonalLiability[]>([]);
   const [goals, setGoals] = useState<PersonalSavingsGoal[]>([]);
@@ -200,17 +206,12 @@ export default function Dashboard() {
   const [importAccountId, setImportAccountId] = useState('');
   const [importLoading, setImportLoading] = useState(false);
 
-  useEffect(() => {
-    setNewTx((prev) => ({ ...prev, date: new Date().toISOString().split('T')[0] }));
-    loadAllData();
-  }, []);
-
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const loadAllData = async () => {
+  const loadAllData = useCallback(async () => {
     try {
       setLoading(true);
       const [netRes, accRes, txRes, expRes, alRes, goalRes] = await Promise.all([
@@ -258,7 +259,14 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [importAccountId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadAllData();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAllData]);
 
   // Submit Manual Transaction
   const handleCreateTransaction = async (e: React.FormEvent) => {
@@ -295,6 +303,14 @@ export default function Dashboard() {
     } catch {
       showToast('Error connecting to server');
     }
+  };
+
+  const openTransactionModal = () => {
+    setNewTx((prev) => ({
+      ...prev,
+      date: prev.date || new Date().toISOString().split('T')[0],
+    }));
+    setShowTxModal(true);
   };
 
   // Submit New Account
@@ -539,7 +555,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
 
             <button
               id="btn-add-tx"
-              onClick={() => setShowTxModal(true)}
+              onClick={openTransactionModal}
               className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg transition-all shadow-lg shadow-emerald-950 flex items-center gap-1.5"
             >
               <span>+</span> Add Transaction
@@ -559,7 +575,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id as DashboardTab)}
               className={`py-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
                 activeTab === tab.id
                   ? 'border-emerald-500 text-emerald-400'
@@ -686,7 +702,13 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                               ))}
                             </Pie>
                             <Tooltip
-                              formatter={(value: any) => [formatKES(value), 'Spent']}
+                              formatter={(value: number | string | readonly (number | string)[] | undefined) => {
+                                const amount =
+                                  typeof value === 'object' && value !== null
+                                    ? Number(Object.values(value)[0] || 0)
+                                    : value ?? 0;
+                                return [formatKES(amount), 'Spent'];
+                              }}
                               contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', borderRadius: '8px' }}
                             />
                           </PieChart>
@@ -818,7 +840,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                     <p className="text-xs text-slate-400">All inflows, expenses, and savings transfers</p>
                   </div>
                   <button
-                    onClick={() => setShowTxModal(true)}
+                    onClick={openTransactionModal}
                     className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 self-start"
                   >
                     <span>+</span> Record Transaction
@@ -1221,7 +1243,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                   <label className="text-xs text-slate-400 block mb-1">Type</label>
                   <select
                     value={newTx.type}
-                    onChange={(e) => setNewTx({ ...newTx, type: e.target.value as any })}
+                    onChange={(e) => setNewTx({ ...newTx, type: e.target.value as TransactionType })}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
                   >
                     <option value="expense">Expense</option>
