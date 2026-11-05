@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTransactions, addTransaction, getAccounts, addAccount } from '@/lib/store';
+import {
+  getTransactions,
+  addTransaction,
+  getAccounts,
+  addAccount,
+  updateTransactionCategory,
+} from '@/lib/store';
 import { apiError } from '@/lib/errors';
 import { todayLocal } from '@/lib/repo/types';
 
@@ -62,5 +68,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, transaction: newTx });
   } catch (error) {
     return apiError(error, 'POST /api/transactions');
+  }
+}
+
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const transactionId = body.id;
+    const category = typeof body.category === 'string' ? body.category.trim() : '';
+
+    if (!transactionId || !category) {
+      return NextResponse.json(
+        { error: 'Transaction id and category are required' },
+        { status: 400 },
+      );
+    }
+
+    const transaction = await updateTransactionCategory(transactionId, category);
+    if (!transaction) {
+      return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, transaction });
+  } catch (error) {
+    return apiError(error, 'PATCH /api/transactions');
   }
 }

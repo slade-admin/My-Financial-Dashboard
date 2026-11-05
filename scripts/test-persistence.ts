@@ -2,13 +2,23 @@ import fs from 'fs';
 import path from 'path';
 import { Pool } from 'pg';
 import { addAccount, getAccounts } from '../src/lib/repo/accounts';
-import { addTransaction, getTransactions } from '../src/lib/repo/transactions';
-import { addAsset, getAssets } from '../src/lib/repo/assets';
-import { addLiability, getLiabilities } from '../src/lib/repo/liabilities';
-import { addBudget, getBudgets } from '../src/lib/repo/budgets';
-import { addSavingsGoal, updateSavingsGoal, getSavingsGoals } from '../src/lib/repo/savings-goals';
+import { addTransaction } from '../src/lib/repo/transactions';
+import { addAsset } from '../src/lib/repo/assets';
+import { addLiability } from '../src/lib/repo/liabilities';
+import { addBudget } from '../src/lib/repo/budgets';
+import { addSavingsGoal, updateSavingsGoal } from '../src/lib/repo/savings-goals';
 import { getNetWorthMetrics } from '../src/lib/repo/networth';
 import { loadLocalEnv, maskUrl } from './load-env';
+
+type SchemaColumn = {
+  table_name: string;
+  column_name: string;
+  data_type: string;
+  numeric_precision: number | null;
+  numeric_scale: number | null;
+};
+
+type PgError = Error & { message: string };
 
 async function runTests() {
   // .env.local is not auto-loaded for tsx scripts the way `next dev` loads it.
@@ -27,8 +37,9 @@ async function runTests() {
   try {
     await pool.query('SELECT 1');
     console.log('✓ Successfully connected to PostgreSQL');
-  } catch (err: any) {
-    console.error('✗ Failed to connect to PostgreSQL:', err.message);
+  } catch (err) {
+    const error = err as PgError;
+    console.error('✗ Failed to connect to PostgreSQL:', error.message);
     console.error('  Ensure Docker Postgres container is running: docker compose up -d');
     process.exit(1);
   }
@@ -54,7 +65,7 @@ async function runTests() {
       ORDER BY table_name, column_name;
     `);
 
-    const colMap = new Map<string, any>();
+    const colMap = new Map<string, SchemaColumn>();
     for (const r of colsRes.rows) {
       colMap.set(`${r.table_name}.${r.column_name}`, r);
     }
@@ -66,6 +77,9 @@ async function runTests() {
 
     const accBalance = colMap.get('accounts.current_balance');
     const txAmount = colMap.get('transactions.amount');
+    if (!accBalance || !txAmount) {
+      throw new Error('current_balance or amount column metadata missing');
+    }
     if (accBalance.data_type !== 'numeric' || txAmount.data_type !== 'numeric') {
       throw new Error('current_balance or amount is not numeric');
     }
@@ -78,7 +92,7 @@ async function runTests() {
       WHERE conrelid = 'transactions'::regclass
         AND contype = 'u';
     `);
-    const hasUniqueRef = constraintRes.rows.some((r: any) =>
+    const hasUniqueRef = constraintRes.rows.some((r: { conname: string }) =>
       r.conname.includes('reference') || r.conname.includes('user_reference')
     );
     if (!hasUniqueRef) {

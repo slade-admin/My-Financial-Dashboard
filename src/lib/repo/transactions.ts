@@ -170,6 +170,22 @@ export async function addTransaction(
   }
 }
 
+export async function updateTransactionCategory(
+  userId: number,
+  transactionId: string | number,
+  category: string,
+): Promise<PersonalTransaction | null> {
+  const res = await query(
+    `UPDATE transactions
+     SET category = $1
+     WHERE id = $2 AND user_id = $3
+     RETURNING *`,
+    [category.trim(), transactionId, userId],
+  );
+  if (res.rowCount === 0) return null;
+  return mapTransactionRow(res.rows[0]);
+}
+
 function mapTransactionRow(r: DbRow): PersonalTransaction {
   // transactions.date is NOT NULL in the schema, so this is always present.
   // Throwing rather than defaulting to today: a missing date means the row is

@@ -1,17 +1,12 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   PieChart,
   Pie,
   Cell,
   ResponsiveContainer,
   Tooltip,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
 } from 'recharts';
 
 interface PersonalAccount {
@@ -91,6 +86,17 @@ interface NetWorthMetrics {
   isDatabaseConnected?: boolean;
 }
 
+interface ExpenseSummary {
+  category: string;
+  icon: string;
+  color: string;
+  total_amount: number;
+  transaction_count: number;
+}
+
+type TransactionType = PersonalTransaction['type'];
+type DashboardTab = 'overview' | 'accounts' | 'transactions' | 'import' | 'networth' | 'goals';
+
 // Format Kenyan Shilling
 const formatKES = (val: number | string) => {
   const num = typeof val === 'number' ? val : parseFloat(String(val) || '0');
@@ -124,11 +130,11 @@ const CATEGORIES_LIST = [
 ];
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'accounts' | 'transactions' | 'import' | 'networth' | 'goals'>('overview');
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [metrics, setMetrics] = useState<NetWorthMetrics | null>(null);
   const [accounts, setAccounts] = useState<PersonalAccount[]>([]);
   const [transactions, setTransactions] = useState<PersonalTransaction[]>([]);
-  const [expenses, setExpenses] = useState<any[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseSummary[]>([]);
   const [assets, setAssets] = useState<PersonalAsset[]>([]);
   const [liabilities, setLiabilities] = useState<PersonalLiability[]>([]);
   const [goals, setGoals] = useState<PersonalSavingsGoal[]>([]);
@@ -200,17 +206,12 @@ export default function Dashboard() {
   const [importAccountId, setImportAccountId] = useState('');
   const [importLoading, setImportLoading] = useState(false);
 
-  useEffect(() => {
-    setNewTx((prev) => ({ ...prev, date: new Date().toISOString().split('T')[0] }));
-    loadAllData();
-  }, []);
-
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const loadAllData = async () => {
+  const loadAllData = useCallback(async () => {
     try {
       setLoading(true);
       const [netRes, accRes, txRes, expRes, alRes, goalRes] = await Promise.all([
@@ -258,7 +259,14 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [importAccountId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadAllData();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAllData]);
 
   // Submit Manual Transaction
   const handleCreateTransaction = async (e: React.FormEvent) => {
@@ -295,6 +303,14 @@ export default function Dashboard() {
     } catch {
       showToast('Error connecting to server');
     }
+  };
+
+  const openTransactionModal = () => {
+    setNewTx((prev) => ({
+      ...prev,
+      date: prev.date || new Date().toISOString().split('T')[0],
+    }));
+    setShowTxModal(true);
   };
 
   // Submit New Account
@@ -489,7 +505,13 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
   // Filtered Transactions
   const filteredTransactions = useMemo(() => {
     return transactions.filter((t) => {
-      const matchCat = selectedCategory === 'All' || t.category.toLowerCase() === selectedCategory.toLowerCase();
+      const needsReview = t.type === 'transfer' && (!t.category || t.category.toLowerCase() === 'other');
+      const matchCat =
+        selectedCategory === 'All'
+          ? true
+          : selectedCategory === 'Needs review'
+          ? needsReview
+          : t.category.toLowerCase() === selectedCategory.toLowerCase();
       const matchAcc = selectedAccountId === 'All' || String(t.account_id) === String(selectedAccountId);
       const matchQuery =
         !searchQuery ||
@@ -499,6 +521,36 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
       return matchCat && matchAcc && matchQuery;
     });
   }, [transactions, selectedCategory, selectedAccountId, searchQuery]);
+
+  const transactionsNeedingReview = useMemo(
+    () => transactions.filter(
+      (t) => t.type === 'transfer' && (!t.category || t.category.toLowerCase() === 'other'),
+    ),
+    [transactions],
+  );
+
+  const handleCategorizeTransaction = async (transactionId: string | number, category: string) => {
+    try {
+      const res = await fetch('/api/transactions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: transactionId, category }),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        showToast(error.error || 'Failed to categorize transaction');
+        return;
+      }
+      setTransactions((current) =>
+        current.map((transaction) =>
+          transaction.id === transactionId ? { ...transaction, category } : transaction,
+        ),
+      );
+      showToast('Transfer categorized');
+    } catch {
+      showToast('Error categorizing transfer');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#0A0D14] text-slate-100 flex flex-col font-sans selection:bg-emerald-500/30">
@@ -539,7 +591,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
 
             <button
               id="btn-add-tx"
-              onClick={() => setShowTxModal(true)}
+              onClick={openTransactionModal}
               className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg transition-all shadow-lg shadow-emerald-950 flex items-center gap-1.5"
             >
               <span>+</span> Add Transaction
@@ -559,7 +611,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id as DashboardTab)}
               className={`py-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
                 activeTab === tab.id
                   ? 'border-emerald-500 text-emerald-400'
@@ -686,7 +738,13 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                               ))}
                             </Pie>
                             <Tooltip
-                              formatter={(value: any) => [formatKES(value), 'Spent']}
+                              formatter={(value: number | string | readonly (number | string)[] | undefined) => {
+                                const amount =
+                                  typeof value === 'object' && value !== null
+                                    ? Number(Object.values(value)[0] || 0)
+                                    : value ?? 0;
+                                return [formatKES(amount), 'Spent'];
+                              }}
                               contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', borderRadius: '8px' }}
                             />
                           </PieChart>
@@ -817,8 +875,16 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                     <h2 className="text-lg font-bold text-white">Transactions History</h2>
                     <p className="text-xs text-slate-400">All inflows, expenses, and savings transfers</p>
                   </div>
+                  {transactionsNeedingReview.length > 0 && (
+                    <button
+                      onClick={() => setSelectedCategory('Needs review')}
+                      className="text-xs font-semibold px-3 py-2 rounded-lg border border-amber-700/60 bg-amber-950/30 text-amber-300 hover:bg-amber-950/60"
+                    >
+                      {transactionsNeedingReview.length} transfer{transactionsNeedingReview.length === 1 ? '' : 's'} need categorizing
+                    </button>
+                  )}
                   <button
-                    onClick={() => setShowTxModal(true)}
+                    onClick={openTransactionModal}
                     className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 self-start"
                   >
                     <span>+</span> Record Transaction
@@ -841,6 +907,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                     className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none"
                   >
                     <option value="All">All Categories</option>
+                    <option value="Needs review">Needs review</option>
                     {CATEGORIES_LIST.map((c) => (
                       <option key={c} value={c}>{c}</option>
                     ))}
@@ -879,9 +946,22 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                               <td className="py-3 px-4 whitespace-nowrap text-slate-400">{t.date}</td>
                               <td className="py-3 px-4 font-sans font-medium text-white max-w-xs truncate">{t.description}</td>
                               <td className="py-3 px-4 font-sans">
-                                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[11px] text-slate-300">
-                                  {t.category}
-                                </span>
+                                {t.type === 'transfer' && (!t.category || t.category.toLowerCase() === 'other') ? (
+                                  <select
+                                    value=""
+                                    onChange={(event) => void handleCategorizeTransaction(t.id, event.target.value)}
+                                    className="bg-amber-950/40 border border-amber-700/60 rounded-full px-2 py-0.5 text-[11px] text-amber-300"
+                                  >
+                                    <option value="">Needs category</option>
+                                    {CATEGORIES_LIST.filter((category) => category !== 'Other').map((category) => (
+                                      <option key={category} value={category}>{category}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[11px] text-slate-300">
+                                    {t.category}
+                                  </span>
+                                )}
                               </td>
                               <td className="py-3 px-4 font-sans text-slate-400">{t.account_name || 'Account'}</td>
                               <td className="py-3 px-4 text-slate-500 text-[11px]">{t.reference || '-'}</td>
@@ -1221,7 +1301,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                   <label className="text-xs text-slate-400 block mb-1">Type</label>
                   <select
                     value={newTx.type}
-                    onChange={(e) => setNewTx({ ...newTx, type: e.target.value as any })}
+                    onChange={(e) => setNewTx({ ...newTx, type: e.target.value as TransactionType })}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
                   >
                     <option value="expense">Expense</option>

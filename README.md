@@ -18,7 +18,7 @@ A personal financial dashboard built with Next.js, React, and TypeScript. It tra
 ## Prerequisites
 
 - **Node.js**: v20 or newer
-- **PostgreSQL**: A running PostgreSQL instance with a database created
+- **Docker**: Docker Engine and Docker Compose for the local PostgreSQL database
 
 ---
 

@@ -46,6 +46,13 @@ export async function addTransactionWithStatus(
   return repo.addTransaction(await currentUserId(), tx);
 }
 
+export async function updateTransactionCategory(
+  transactionId: string | number,
+  category: string,
+): Promise<repo.PersonalTransaction | null> {
+  return repo.updateTransactionCategory(await currentUserId(), transactionId, category);
+}
+
 // ----------------- ASSETS & LIABILITIES -----------------
 export async function getAssets(): Promise<repo.PersonalAsset[]> {
   return repo.getAssets(await currentUserId());
