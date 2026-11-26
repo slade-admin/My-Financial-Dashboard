@@ -1,98 +1,57 @@
-/**
- * scripts/test-ingest-token.ts  —  npm run test:ingest-token
- *
- * Verifies the Phase 2 selector/verifier rewrite of ingest tokens:
- *   1. A freshly issued token validates and returns the right user id.
- *   2. A tampered verifier is rejected.
- *   3. An unknown selector is rejected.
- *   4. Validation cost does NOT grow with the number of tokens in the table.
- *      (The previous implementation ran one argon2id verify per row, so this
- *      was O(n); it should now be flat.)
- */
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import {
   createIngestToken,
   validateIngestToken,
   deleteIngestToken,
+  listIngestTokens,
 } from '../src/lib/repo/auth';
-import { getPool } from '../src/lib/db';
-import { loadLocalEnv, maskUrl } from './load-env';
+import { createTestUser, withTestDatabase } from './test-db';
 
-const USER_ID = 1; // seed user
-
-function ms(t: bigint): number {
-  return Number(t) / 1e6;
-}
-
-async function timeIt(fn: () => Promise<unknown>): Promise<number> {
+async function averageValidationMs(token: string): Promise<number> {
   const start = process.hrtime.bigint();
-  await fn();
-  return ms(process.hrtime.bigint() - start);
+  for (let i = 0; i < 3; i++) await validateIngestToken(token);
+  return Number(process.hrtime.bigint() - start) / 1e6 / 3;
 }
 
-async function main() {
-  // .env.local is not auto-loaded for tsx scripts the way `next dev` loads it.
-  loadLocalEnv();
-  if (!process.env.DATABASE_URL) {
-    console.error('ERROR: DATABASE_URL is required. Set it in .env.local or pass it inline.');
-    process.exit(1);
-  }
-  console.log(`[ingest-token test] database: ${maskUrl(process.env.DATABASE_URL)}
-`);
+test('ingest tokens reject tampering, enforce ownership and support revocation', async (t) => {
+  await withTestDatabase(async ({ pool }) => {
+    const userId = await createTestUser(pool);
+    const otherId = await createTestUser(pool);
+    const { token, row } = await createIngestToken(userId, 'Test Token');
 
-  const pool = getPool();
-  const created: number[] = [];
-  let failures = 0;
-  const check = (ok: boolean, label: string) => {
-    console.log(`${ok ? '✓' : '✗'} ${label}`);
-    if (!ok) failures++;
-  };
+    assert.equal(await validateIngestToken(token), userId);
+    const [selector, verifier] = token.split('.');
+    const tampered = verifier.slice(0, -1) + (verifier.endsWith('a') ? 'b' : 'a');
+    assert.equal(await validateIngestToken(`${selector}.${tampered}`), null);
+    assert.equal(await validateIngestToken(`deadbeefdeadbeefdeadbeef.${verifier}`), null);
+    assert.equal(await validateIngestToken('no-dot-here'), null);
+    assert.deepEqual(await listIngestTokens(otherId), []);
+    const listed = await listIngestTokens(userId);
+    assert.equal(listed[0].id, row.id);
+    assert.equal('token_hash' in listed[0], false);
+    assert.equal('selector' in listed[0], false);
+    await deleteIngestToken(otherId, row.id);
+    assert.equal(await validateIngestToken(token), userId);
 
-  try {
-    // 1. happy path
-    const { token, row } = await createIngestToken(USER_ID, 'test-token');
-    created.push(row.id);
-    check((await validateIngestToken(token)) === USER_ID, 'valid token resolves to its user');
+    await t.test('validation cost stays flat as the token table grows', async () => {
+      const baseline = await averageValidationMs(token);
+      // Reuse a fixture hash rather than spending CPU issuing 40 real tokens.
+      await pool.query(
+        `INSERT INTO ingest_tokens (user_id, selector, token_hash, label)
+         SELECT $1, md5(n::text), token_hash, 'Bulk Test Token'
+         FROM ingest_tokens CROSS JOIN generate_series(1, 40) AS n
+         WHERE id = $2`,
+        [otherId, row.id],
+      );
+      const loaded = await averageValidationMs(token);
+      assert.ok(
+        loaded < baseline * 3 + 50,
+        `Validation grew from ${baseline.toFixed(1)} ms to ${loaded.toFixed(1)} ms`,
+      );
+    });
 
-    // 2. tampered verifier
-    const [sel, ver] = token.split('.');
-    const flipped = ver.slice(0, -1) + (ver.endsWith('a') ? 'b' : 'a');
-    check((await validateIngestToken(`${sel}.${flipped}`)) === null, 'tampered verifier rejected');
-
-    // 3. unknown selector
-    check((await validateIngestToken('deadbeefdeadbeefdeadbeef.' + ver)) === null, 'unknown selector rejected');
-
-    // 4. malformed
-    check((await validateIngestToken('no-dot-here')) === null, 'malformed token rejected');
-
-    // 5. cost must not scale with table size
-    const baseline = await timeIt(() => validateIngestToken(token));
-
-    const BULK = 40;
-    for (let i = 0; i < BULK; i++) {
-      const t = await createIngestToken(USER_ID, `bulk-${i}`);
-      created.push(t.row.id);
-    }
-    const { rows } = await pool.query<{ count: string }>('SELECT COUNT(*) FROM ingest_tokens');
-    const loaded = await timeIt(() => validateIngestToken(token));
-
-    console.log(
-      `\n  tokens in table: ${rows[0].count}\n` +
-        `  validate before bulk insert: ${baseline.toFixed(1)} ms\n` +
-        `  validate after  bulk insert: ${loaded.toFixed(1)} ms`,
-    );
-
-    // O(n) would multiply cost by ~BULK. Allow generous slack for noise.
-    check(loaded < baseline * 3 + 50, 'validation cost is flat, not O(number of tokens)');
-  } finally {
-    for (const id of created) await deleteIngestToken(USER_ID, id);
-    await pool.end();
-  }
-
-  console.log(failures === 0 ? '\nAll ingest-token checks passed.' : `\n${failures} check(s) FAILED.`);
-  process.exit(failures === 0 ? 0 : 1);
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+    await deleteIngestToken(userId, row.id);
+    assert.equal(await validateIngestToken(token), null);
+  });
 });

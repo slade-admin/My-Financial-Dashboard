@@ -13,7 +13,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import AuthStyles from '@/app/_components/AuthStyles';
+import { apiFetch } from '@/lib/api-client';
+import LogoutButton from '@/components/LogoutButton';
 
 interface TokenRow {
   id: number;
@@ -37,6 +40,7 @@ export default function IngestTokensPage() {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [creating, setCreating] = useState(false);
 
   // Deliberately performs no synchronous state update before its first await:
@@ -45,7 +49,7 @@ export default function IngestTokensPage() {
   // the previous error happens once the request is already in flight.
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/ingest-tokens');
+      const res = await apiFetch('/api/ingest-tokens');
       setError('');
       if (res.status === 401) {
         router.replace('/login?next=/settings/ingest');
@@ -54,6 +58,7 @@ export default function IngestTokensPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to load tokens');
       setTokens(data.tokens ?? []);
+      setLoaded(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load tokens');
     } finally {
@@ -79,7 +84,7 @@ export default function IngestTokensPage() {
     setCreating(true);
     setCopied(false);
     try {
-      const res = await fetch('/api/ingest-tokens', {
+      const res = await apiFetch('/api/ingest-tokens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: label.trim() || undefined }),
@@ -103,7 +108,7 @@ export default function IngestTokensPage() {
     )) return;
     setError('');
     try {
-      const res = await fetch(`/api/ingest-tokens?id=${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/ingest-tokens?id=${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to revoke token');
       await load();
@@ -115,6 +120,9 @@ export default function IngestTokensPage() {
   return (
     <div className="ingest-page">
       <div className="ingest-card">
+        <nav className="mb-6 flex flex-wrap items-center gap-5 text-sm text-emerald-400" aria-label="Settings navigation">
+          <Link href="/">Dashboard</Link><Link href="/settings">Settings / Profile</Link><LogoutButton />
+        </nav>
         <header className="ingest-header">
           <h1 className="ingest-title">SMS sync tokens</h1>
           <p className="ingest-sub">
@@ -123,7 +131,9 @@ export default function IngestTokensPage() {
           </p>
         </header>
 
-        {error && <div className="form-error" role="alert"><span>⚠️</span> {error}</div>}
+        {error && <div className="form-error" role="alert"><span>⚠️</span> {error}
+          <button type="button" className="ml-2 underline" onClick={() => { void load(); }}>Retry loading tokens</button>
+        </div>}
 
         {fresh && (
           <div className="token-reveal" role="status">
@@ -169,6 +179,8 @@ export default function IngestTokensPage() {
         <h2 className="section-title">Active tokens</h2>
         {loading ? (
           <p className="muted">Loading…</p>
+        ) : !loaded ? (
+          <p className="muted">Tokens unavailable. Retry loading them above.</p>
         ) : tokens.length === 0 ? (
           <p className="muted">No tokens yet. Create one, then set up your phone below.</p>
         ) : (
@@ -213,6 +225,18 @@ export default function IngestTokensPage() {
         <p className="muted small">
           Re-sending the same SMS is harmless: messages are de-duplicated on the M-Pesa
           receipt number, so a retrying forwarder cannot double-count a transaction.
+        </p>
+        <p className="muted small">
+          Configure the visible trailing bank account digits under Accounts &amp; Wallets.
+          Bank alerts are not assigned by institution alone. A <code>202</code> response means
+          the message is waiting under Import history &amp; pending SMS reviews; balances
+          stay unchanged until you verify its date, identity, type, fees and wallets.
+        </p>
+        <p className="muted small">
+          Optionally send <code>receivedAt</code> as the original SMS receipt timestamp with
+          its timezone, unchanged on retries. Pending duplicates show a received count;
+          review whether they are retries or distinct events. Missing transaction dates
+          still require the actual date, not the forwarding time.
         </p>
       </div>
 

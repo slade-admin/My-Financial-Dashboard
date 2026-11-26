@@ -1,6 +1,18 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import Link from 'next/link';
+import {
+  todayLocal, type Category, type PersonalAccount, type PersonalTransaction, type PersonalAsset,
+  type PersonalLiability, type PersonalSavingsGoal, type TransactionPage, type NetWorthMetrics as FinancialMetrics,
+} from '@/lib/repo/types';
+import { KENYAN_EXPENSE_CATEGORIES } from '@/lib/categories';
+import { apiFetch, apiJson, jsonRequest } from '@/lib/api-client';
+import ImportPanel from '@/components/ImportPanel';
+import RecordEditor, { type EditableSelection } from '@/components/RecordEditor';
+import HistoryDialog, { type HistorySelection } from '@/components/HistoryDialog';
+import PlanningPanel from '@/components/PlanningPanel';
+import LogoutButton from '@/components/LogoutButton';
 import {
   PieChart,
   Pie,
@@ -9,80 +21,7 @@ import {
   Tooltip,
 } from 'recharts';
 
-interface PersonalAccount {
-  id: string | number;
-  name: string;
-  institution: string;
-  account_type: string;
-  currency: string;
-  balance: number;
-  is_asset: boolean;
-}
-
-interface PersonalTransaction {
-  id: string | number;
-  account_id: string | number;
-  account_name?: string;
-  amount: number;
-  currency: string;
-  type: 'income' | 'expense' | 'transfer';
-  date: string;
-  description: string;
-  category: string;
-  reference?: string;
-  import_source: string;
-}
-
-interface PersonalAsset {
-  id: string | number;
-  name: string;
-  category: string;
-  estimated_value: number;
-  currency: string;
-  notes?: string;
-}
-
-interface PersonalLiability {
-  id: string | number;
-  name: string;
-  creditor: string;
-  category: string;
-  principal_amount: number;
-  outstanding_balance: number;
-  interest_rate?: number;
-  monthly_payment?: number;
-  currency: string;
-  due_date?: string;
-  notes?: string;
-}
-
-interface PersonalBudget {
-  id: string | number;
-  category: string;
-  monthly_limit: number;
-  currency: string;
-}
-
-interface PersonalSavingsGoal {
-  id: string | number;
-  name: string;
-  target_amount: number;
-  current_amount: number;
-  currency: string;
-  target_date?: string;
-}
-
-interface NetWorthMetrics {
-  netWorth: number;
-  totalAssets: number;
-  liquidCash: number;
-  physicalAssets: number;
-  totalLiabilities: number;
-  debtToAssetRatio: number;
-  monthlyIncome: number;
-  monthlyExpenses: number;
-  netSavings: number;
-  savingsRate: number;
+interface NetWorthMetrics extends FinancialMetrics {
   isDatabaseConnected?: boolean;
 }
 
@@ -94,7 +33,7 @@ interface ExpenseSummary {
   transaction_count: number;
 }
 
-type TransactionType = PersonalTransaction['type'];
+type TransactionType = Exclude<PersonalTransaction['type'], 'adjustment'>;
 type DashboardTab = 'overview' | 'accounts' | 'transactions' | 'import' | 'networth' | 'goals';
 
 // Format Kenyan Shilling
@@ -103,31 +42,12 @@ const formatKES = (val: number | string) => {
   return new Intl.NumberFormat('en-KE', {
     style: 'currency',
     currency: 'KES',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   })
     .format(num)
     .replace('KES', 'KSh ');
 };
-
-const CATEGORIES_LIST = [
-  'Food & Groceries',
-  'Rent & Housing',
-  'Utilities & Water (KPLC)',
-  'Airtime & Internet (Safaricom)',
-  'Transport & Fuel (Matatu/Petrol)',
-  'Family & Chamas',
-  'Shopping & Essentials',
-  'Healthcare & Pharmacy',
-  'Education & School Fees',
-  'Entertainment & Dining',
-  'Salary & Primary Income',
-  'Side Hustle & Consulting',
-  'Transfers & Remittance',
-  'Savings & MMF Deposit',
-  'Loan & Fuliza Repayment',
-  'Other',
-];
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
@@ -138,14 +58,32 @@ export default function Dashboard() {
   const [assets, setAssets] = useState<PersonalAsset[]>([]);
   const [liabilities, setLiabilities] = useState<PersonalLiability[]>([]);
   const [goals, setGoals] = useState<PersonalSavingsGoal[]>([]);
-  const [budgets, setBudgets] = useState<PersonalBudget[]>([]);
+  const [categories, setCategories] = useState<Category[]>(KENYAN_EXPENSE_CATEGORIES);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [editor, setEditor] = useState<EditableSelection>();
+  const [history, setHistory] = useState<HistorySelection>();
+  const [formSaving, setFormSaving] = useState(false);
+  const creationRequests = useRef(new Map<string, string>());
+  const [formError, setFormError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const CATEGORIES_LIST = categories.map((category) => category.name);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedAccountId, setSelectedAccountId] = useState('All');
+  const [transactionType, setTransactionType] = useState('All');
+  const [transactionStatus, setTransactionStatus] = useState('active');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [txPage, setTxPage] = useState(0);
+  const [txTotal, setTxTotal] = useState(0);
+  const [needsReviewCount, setNeedsReviewCount] = useState(0);
+  const [hasMoreTransactions, setHasMoreTransactions] = useState(false);
+  const [transactionsLoading, setTransactionsLoading] = useState(true);
+  const [transactionError, setTransactionError] = useState('');
 
   // Modals
   const [showTxModal, setShowTxModal] = useState(false);
@@ -153,6 +91,11 @@ export default function Dashboard() {
   const [showAssetModal, setShowAssetModal] = useState(false);
   const [showLiabModal, setShowLiabModal] = useState(false);
   const [showGoalModal, setShowGoalModal] = useState(false);
+  const [txSaving, setTxSaving] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+  const [reconciliation, setReconciliation] = useState({
+    account_id: '', actual_balance: '', date: '', reason: '',
+  });
 
   // New Transaction Form State
   const [newTx, setNewTx] = useState({
@@ -163,6 +106,8 @@ export default function Dashboard() {
     description: '',
     category: 'Food & Groceries',
     reference: '',
+    transfer_account_id: '',
+    fee_amount: '',
   });
 
   // New Account Form State
@@ -172,6 +117,7 @@ export default function Dashboard() {
     account_type: 'mobile_money',
     currency: 'KES',
     balance: '',
+    account_identifier: '',
   });
 
   // New Asset Form State
@@ -201,65 +147,37 @@ export default function Dashboard() {
     target_date: '',
   });
 
-  // Import State
-  const [importText, setImportText] = useState('');
-  const [importAccountId, setImportAccountId] = useState('');
-  const [importLoading, setImportLoading] = useState(false);
-
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const loadAllData = useCallback(async () => {
+  const loadAllData = useCallback(async (showLoading = true) => {
     try {
-      setLoading(true);
-      const [netRes, accRes, txRes, expRes, alRes, goalRes] = await Promise.all([
-        fetch('/api/networth'),
-        fetch('/api/transactions?type=accounts'),
-        fetch('/api/transactions?limit=200'),
-        fetch('/api/expenses/by_category'),
-        fetch('/api/assets-liabilities'),
-        fetch('/api/goals'),
+      if (showLoading) setLoading(true);
+      const [netData, accData, expData, alData, goalData, categoryData] = await Promise.all([
+        apiJson<NetWorthMetrics>('/api/networth'),
+        apiJson<{ accounts: PersonalAccount[] }>('/api/transactions?type=accounts'),
+        apiJson<{ expenses: ExpenseSummary[] }>('/api/expenses/by_category'),
+        apiJson<{ assets: PersonalAsset[]; liabilities: PersonalLiability[] }>('/api/assets-liabilities'),
+        apiJson<{ goals: PersonalSavingsGoal[] }>('/api/goals'),
+        apiJson<{ categories: Category[] }>('/api/categories'),
       ]);
-
-      if (netRes.ok) {
-        const netData = await netRes.json();
-        setMetrics(netData);
+      if (!netData || typeof netData.netWorth !== 'number' || !Array.isArray(accData.accounts) ||
+          !Array.isArray(expData.expenses) || !Array.isArray(alData.assets) || !Array.isArray(alData.liabilities) ||
+          !Array.isArray(goalData.goals) || !Array.isArray(categoryData.categories)) {
+        throw new Error('The server returned incomplete financial data. Retry instead of relying on these totals.');
       }
-      if (accRes.ok) {
-        const accData = await accRes.json();
-        setAccounts(accData.accounts || []);
-        if (accData.accounts?.length > 0 && !importAccountId) {
-          setImportAccountId(String(accData.accounts[0].id));
-          setNewTx((prev) => ({ ...prev, account_id: String(accData.accounts[0].id) }));
-        }
-      }
-      if (txRes.ok) {
-        const txData = await txRes.json();
-        setTransactions(txData.transactions || []);
-      }
-      if (expRes.ok) {
-        const expData = await expRes.json();
-        setExpenses(expData.expenses || []);
-      }
-      if (alRes.ok) {
-        const alData = await alRes.json();
-        setAssets(alData.assets || []);
-        setLiabilities(alData.liabilities || []);
-      }
-      if (goalRes.ok) {
-        const gData = await goalRes.json();
-        setGoals(gData.goals || []);
-        setBudgets(gData.budgets || []);
-      }
+      setMetrics(netData); setAccounts(accData.accounts); setExpenses(expData.expenses);
+      setAssets(alData.assets); setLiabilities(alData.liabilities); setGoals(goalData.goals); setCategories(categoryData.categories);
+      if (accData.accounts.length > 0) setNewTx((prev) => prev.account_id ? prev : { ...prev, account_id: String(accData.accounts[0].id) });
+      setDataError(''); setTransactionsLoading(true); setRefreshKey((key) => key + 1);
     } catch (e) {
-      console.error('Failed to load dashboard data:', e);
-      showToast('Error loading financial data');
+      setDataError(e instanceof Error ? e.message : 'Could not load financial data. Please retry.');
     } finally {
       setLoading(false);
     }
-  }, [importAccountId]);
+  }, [setNewTx]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -268,19 +186,50 @@ export default function Dashboard() {
     return () => window.clearTimeout(timer);
   }, [loadAllData]);
 
+  const loadTransactions = useCallback(async (signal?: AbortSignal) => {
+    setTransactionsLoading(true); setTransactionError('');
+    const params = new URLSearchParams({ limit: '50', offset: String(txPage * 50) });
+    if (searchQuery.trim()) params.set('search', searchQuery.trim());
+    if (selectedCategory !== 'All') params.set('category', selectedCategory);
+    if (selectedAccountId !== 'All') params.set('accountId', selectedAccountId);
+    if (transactionType !== 'All') params.set('transactionType', transactionType);
+    params.set('status', transactionStatus);
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
+    try {
+      const data = await apiJson<TransactionPage>(`/api/transactions?${params}`, { signal });
+      if (!signal?.aborted) {
+        setTransactions(data.transactions); setTxTotal(data.total); setHasMoreTransactions(data.hasMore); setNeedsReviewCount(data.needsReviewCount);
+      }
+    } catch (reason) {
+      if (!signal?.aborted) setTransactionError(reason instanceof Error ? reason.message : 'Could not load transactions.');
+    } finally { if (!signal?.aborted) setTransactionsLoading(false); }
+  }, [searchQuery, selectedCategory, selectedAccountId, transactionType, transactionStatus, startDate, endDate, txPage]);
+
+  useEffect(() => {
+    if (activeTab !== 'transactions') return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void loadTransactions(controller.signal); }, 200);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [activeTab, loadTransactions, refreshKey]);
+
   // Submit Manual Transaction
   const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (txSaving) return;
     if (!newTx.amount || !newTx.description || !newTx.account_id) {
       showToast('Please fill all required fields');
       return;
     }
 
+    setTxSaving(true); setFormError('');
     try {
-      const res = await fetch('/api/transactions', {
+      const reference = newTx.reference || `TXN${crypto.randomUUID()}`;
+      setNewTx((previous) => ({ ...previous, reference }));
+      const res = await apiFetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newTx),
+        body: JSON.stringify({ ...newTx, reference }),
       });
 
       if (res.ok) {
@@ -290,266 +239,117 @@ export default function Dashboard() {
           account_id: accounts[0]?.id ? String(accounts[0].id) : '',
           amount: '',
           type: 'expense',
-          date: new Date().toISOString().split('T')[0],
+          date: todayLocal(),
           description: '',
           category: 'Food & Groceries',
           reference: '',
+          transfer_account_id: '',
+          fee_amount: '',
         });
-        loadAllData();
+        await loadAllData(false);
       } else {
         const err = await res.json();
-        showToast(err.error || 'Failed to add transaction');
+        setFormError(err.error || 'Failed to add transaction. Retry.');
       }
     } catch {
-      showToast('Error connecting to server');
+      setFormError('Could not confirm the save. Retry with the same reference to avoid counting it twice.');
+    } finally {
+      setTxSaving(false);
     }
   };
 
   const openTransactionModal = () => {
+    setFormError('');
     setNewTx((prev) => ({
       ...prev,
-      date: prev.date || new Date().toISOString().split('T')[0],
+      date: prev.date || todayLocal(),
     }));
     setShowTxModal(true);
   };
 
-  // Submit New Account
-  const handleCreateAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newAcc.name) {
-      showToast('Account name is required');
-      return;
-    }
-
+  const handleReconcile = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (reconciling) return;
+    setReconciling(true);
     try {
-      const res = await fetch('/api/transactions', {
+      const response = await apiFetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'new_account',
-          ...newAcc,
-          balance: parseFloat(newAcc.balance || '0'),
+          type: 'reconcile_account', ...reconciliation,
+          version: accounts.find((account) => String(account.id) === reconciliation.account_id)?.version,
         }),
       });
-
-      if (res.ok) {
-        showToast('Account created successfully!');
-        setShowAccModal(false);
-        setNewAcc({ name: '', institution: '', account_type: 'mobile_money', currency: 'KES', balance: '' });
-        loadAllData();
-      }
-    } catch {
-      showToast('Failed to create account');
-    }
-  };
-
-  // Submit New Asset
-  const handleCreateAsset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newAsset.name || !newAsset.estimated_value) {
-      showToast('Please enter asset name and valuation');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/assets-liabilities', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: 'asset',
-          ...newAsset,
-          estimated_value: parseFloat(newAsset.estimated_value),
-        }),
-      });
-
-      if (res.ok) {
-        showToast('Asset added to balance sheet!');
-        setShowAssetModal(false);
-        setNewAsset({ name: '', category: 'land', estimated_value: '', notes: '' });
-        loadAllData();
-      }
-    } catch {
-      showToast('Failed to save asset');
-    }
-  };
-
-  // Submit New Liability
-  const handleCreateLiability = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newLiab.name || !newLiab.outstanding_balance) {
-      showToast('Please enter liability details');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/assets-liabilities', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: 'liability',
-          ...newLiab,
-          principal_amount: parseFloat(newLiab.principal_amount || newLiab.outstanding_balance),
-          outstanding_balance: parseFloat(newLiab.outstanding_balance),
-          interest_rate: newLiab.interest_rate ? parseFloat(newLiab.interest_rate) : undefined,
-          monthly_payment: newLiab.monthly_payment ? parseFloat(newLiab.monthly_payment) : undefined,
-        }),
-      });
-
-      if (res.ok) {
-        showToast('Liability recorded on balance sheet!');
-        setShowLiabModal(false);
-        setNewLiab({ name: '', creditor: '', category: 'personal_loan', principal_amount: '', outstanding_balance: '', interest_rate: '', monthly_payment: '' });
-        loadAllData();
-      }
-    } catch {
-      showToast('Failed to record liability');
-    }
-  };
-
-  // Submit New Goal
-  const handleCreateGoal = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newGoal.name || !newGoal.target_amount) {
-      showToast('Please enter goal name and target amount');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/goals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...newGoal,
-          target_amount: parseFloat(newGoal.target_amount),
-          current_amount: parseFloat(newGoal.current_amount || '0'),
-        }),
-      });
-
-      if (res.ok) {
-        showToast('Savings goal created!');
-        setShowGoalModal(false);
-        setNewGoal({ name: '', target_amount: '', current_amount: '', target_date: '' });
-        loadAllData();
-      }
-    } catch {
-      showToast('Failed to save goal');
-    }
-  };
-
-  // Contribute to Goal
-  const handleContributeGoal = async (id: string | number, amount: number) => {
-    try {
-      const res = await fetch('/api/goals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'contribute', id, amount }),
-      });
-      if (res.ok) {
-        showToast(`Contributed ${formatKES(amount)} to goal!`);
-        loadAllData();
-      }
-    } catch {
-      showToast('Failed to update goal');
-    }
-  };
-
-  // Import Statement / SMS
-  const handleImportStatement = async (sampleType?: 'sms' | 'csv') => {
-    let textToUse = importText;
-
-    if (sampleType === 'sms') {
-      textToUse = `QHL921KK89 Confirmed. Ksh3,200.00 sent to NAIVAS WESTLANDS on 22/10/26 at 11:45 AM. New M-PESA balance is Ksh42,850.00.
-QHL483JJ22 Confirmed. Ksh1,500.00 paid to KPLC PREPAID.
-QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10/26.`;
-      setImportText(textToUse);
-    } else if (sampleType === 'csv') {
-      textToUse = `"Receipt No.","Completion Time","Details","Transaction Status","Paid In","Withdrawn","Balance"
-"RJL902KL11","2026-10-21 09:30:12","Naivas Supermarket Food","Completed","0.00","4200.00","38650.00"
-"RJL482PQ99","2026-10-20 18:14:05","Kenya Power KPLC Tokens","Completed","0.00","2000.00","42850.00"
-"RJL110AZ77","2026-10-19 14:00:00","Consulting Retainer Inflow","Completed","50000.00","0.00","44850.00"`;
-      setImportText(textToUse);
-    }
-
-    if (!textToUse.trim()) {
-      showToast('Please paste statement rows or SMS messages');
-      return;
-    }
-
-    try {
-      setImportLoading(true);
-      const res = await fetch('/api/import/statement', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rawText: textToUse,
-          accountId: importAccountId || (accounts[0] ? accounts[0].id : 1),
-          importType: sampleType === 'sms' ? 'sms' : 'statement',
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        showToast(`Successfully imported ${data.count} transactions into ${data.accountName}!`);
-        setImportText('');
-        loadAllData();
-      } else {
-        showToast(data.error || 'Failed to parse transactions');
-      }
-    } catch {
-      showToast('Import request error');
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  // Filtered Transactions
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((t) => {
-      const needsReview = t.type === 'transfer' && (!t.category || t.category.toLowerCase() === 'other');
-      const matchCat =
-        selectedCategory === 'All'
-          ? true
-          : selectedCategory === 'Needs review'
-          ? needsReview
-          : t.category.toLowerCase() === selectedCategory.toLowerCase();
-      const matchAcc = selectedAccountId === 'All' || String(t.account_id) === String(selectedAccountId);
-      const matchQuery =
-        !searchQuery ||
-        t.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (t.reference && t.reference.toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchCat && matchAcc && matchQuery;
-    });
-  }, [transactions, selectedCategory, selectedAccountId, searchQuery]);
-
-  const transactionsNeedingReview = useMemo(
-    () => transactions.filter(
-      (t) => t.type === 'transfer' && (!t.category || t.category.toLowerCase() === 'other'),
-    ),
-    [transactions],
-  );
-
-  const handleCategorizeTransaction = async (transactionId: string | number, category: string) => {
-    try {
-      const res = await fetch('/api/transactions', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: transactionId, category }),
-      });
-      if (!res.ok) {
-        const error = await res.json();
-        showToast(error.error || 'Failed to categorize transaction');
+      const data = await response.json();
+      if (!response.ok) {
+        setFormError(data.error || 'Failed to reconcile balance. Retry.');
         return;
       }
-      setTransactions((current) =>
-        current.map((transaction) =>
-          transaction.id === transactionId ? { ...transaction, category } : transaction,
-        ),
-      );
-      showToast('Transfer categorized');
+      showToast(data.adjustment ? 'Balance reconciled; adjustment recorded in history' : 'Balance already matches');
+      setReconciliation({ account_id: '', actual_balance: '', date: '', reason: '' });
+      await loadAllData(false);
     } catch {
-      showToast('Error categorizing transfer');
+      setFormError('Could not reconcile the balance. Retry.');
+    } finally {
+      setReconciling(false);
     }
+  };
+
+  const createRecord = async (url: string, body: object, close: () => void, message: string) => {
+    if (formSaving) return;
+    setFormSaving(true); setFormError('');
+    const scope = `${url}:${'kind' in body ? body.kind : 'type' in body ? body.type : ''}`;
+    const requestId = creationRequests.current.get(scope) ?? crypto.randomUUID();
+    creationRequests.current.set(scope, requestId);
+    try {
+      await apiJson(url, jsonRequest('POST', { ...body, request_id: requestId }));
+      creationRequests.current.delete(scope);
+      close(); showToast(message); await loadAllData(false);
+    } catch (reason) { setFormError(reason instanceof Error ? reason.message : 'Could not save. Retry.'); }
+    finally { setFormSaving(false); }
+  };
+
+  const handleCreateAccount = (event: React.FormEvent) => {
+    event.preventDefault();
+    void createRecord('/api/transactions', { type: 'new_account', ...newAcc, balance: newAcc.balance || '0' }, () => {
+      setShowAccModal(false);
+      setNewAcc({ name: '', institution: '', account_type: 'mobile_money', currency: 'KES', balance: '', account_identifier: '' });
+    }, 'Account created.');
+  };
+  const handleCreateAsset = (event: React.FormEvent) => {
+    event.preventDefault();
+    void createRecord('/api/assets-liabilities', { kind: 'asset', ...newAsset }, () => {
+      setShowAssetModal(false); setNewAsset({ name: '', category: 'land', estimated_value: '', notes: '' });
+    }, 'Asset added.');
+  };
+  const handleCreateLiability = (event: React.FormEvent) => {
+    event.preventDefault();
+    void createRecord('/api/assets-liabilities', {
+      kind: 'liability', ...newLiab, principal_amount: newLiab.principal_amount || newLiab.outstanding_balance,
+      interest_rate: newLiab.interest_rate || undefined, monthly_payment: newLiab.monthly_payment || undefined,
+    }, () => {
+      setShowLiabModal(false);
+      setNewLiab({ name: '', creditor: '', category: 'personal_loan', principal_amount: '', outstanding_balance: '', interest_rate: '', monthly_payment: '' });
+    }, 'Liability recorded.');
+  };
+  const handleCreateGoal = (event: React.FormEvent) => {
+    event.preventDefault();
+    void createRecord('/api/goals', { ...newGoal, current_amount: newGoal.current_amount || '0' }, () => {
+      setShowGoalModal(false); setNewGoal({ name: '', target_amount: '', current_amount: '', target_date: '' });
+    }, 'Savings goal created. No money moved.');
+  };
+
+  const handleCategorizeTransaction = async (transactionId: string | number, category: string) => {
+    if (txSaving) return;
+    setTxSaving(true);
+    try {
+      await apiJson('/api/transactions', jsonRequest('PATCH', {
+        id: transactionId, category, version: transactions.find((transaction) => transaction.id === transactionId)?.version,
+      }));
+      setRefreshKey((key) => key + 1);
+      showToast('Transfer categorized');
+    } catch (reason) { setTransactionError(reason instanceof Error ? reason.message : 'Could not categorize transfer.'); }
+    finally { setTxSaving(false); }
   };
 
   return (
@@ -570,14 +370,14 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-                Track-suite <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">MVP Personal Wealth</span>
+                Track-suite <span className="hidden sm:inline text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">MVP Personal Wealth</span>
               </h1>
-              <p className="text-xs text-slate-400">Personal Net Worth, M-Pesa & Cash Flow Tracker</p>
+              <p className="hidden sm:block text-xs text-slate-400">Personal Net Worth, M-Pesa & Cash Flow Tracker</p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {metrics?.isDatabaseConnected ? (
+            {metrics?.isDatabaseConnected && !dataError && !loading ? (
               <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-950/80 text-emerald-400 border border-emerald-800">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                 PostgreSQL Connected
@@ -585,13 +385,15 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
             ) : (
               <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-950/60 text-amber-300 border border-amber-800/80">
                 <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                In-Memory Session Mode
+                {loading ? 'Loading financial data...' : 'Financial data unavailable'}
               </span>
             )}
 
             <button
               id="btn-add-tx"
               onClick={openTransactionModal}
+              disabled={loading || !!dataError || accounts.length === 0}
+              title={accounts.length === 0 ? 'Create an account first' : undefined}
               className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg transition-all shadow-lg shadow-emerald-950 flex items-center gap-1.5"
             >
               <span>+</span> Add Transaction
@@ -611,7 +413,11 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as DashboardTab)}
+              aria-label={tab.label}
+              onClick={() => {
+                if (tab.id === 'transactions' && activeTab !== 'transactions') setTransactionsLoading(true);
+                setActiveTab(tab.id as DashboardTab);
+              }}
               className={`py-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
                 activeTab === tab.id
                   ? 'border-emerald-500 text-emerald-400'
@@ -622,6 +428,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
               {tab.label}
             </button>
           ))}
+          <Link href="/settings" className="whitespace-nowrap px-3 py-3 text-xs text-teal-300">Settings / Profile</Link>
+          <Link href="/settings/ingest" className="whitespace-nowrap px-3 py-3 text-xs text-teal-300">SMS tokens</Link>
+          <div className="flex items-center px-3"><LogoutButton /></div>
+          <button type="button" disabled={loading} onClick={() => { void loadAllData(); }} className="px-3 text-xs text-slate-400 disabled:opacity-40">Refresh</button>
         </div>
       </header>
 
@@ -631,6 +441,13 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           <div className="h-96 flex flex-col items-center justify-center gap-4 text-slate-400">
             <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
             <p className="text-sm font-medium">Calculating personal wealth balance sheet...</p>
+          </div>
+        ) : dataError ? (
+          <div role="alert" className="space-y-3 rounded-2xl border border-rose-900 bg-rose-950/30 p-6 text-sm text-rose-200">
+            <h2 className="font-bold">Financial data could not be loaded</h2>
+            <p>{dataError}</p>
+            <p>No zero-balance or in-memory fallback is being shown. Check PostgreSQL and that all migrations have been applied, then retry.</p>
+            <button type="button" onClick={() => { void loadAllData(); }} className="rounded-lg bg-slate-800 px-4 py-2 text-white">Retry loading dashboard</button>
           </div>
         ) : (
           <>
@@ -716,7 +533,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                   {/* Expense Breakdown Donut */}
                   <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5">
                     <h3 className="text-sm font-bold text-white mb-4 flex items-center justify-between">
-                      <span>Kenyan Expense Category Breakdown</span>
+                      <span>This Month&apos;s Expense Breakdown</span>
                       <span className="text-xs text-slate-400">{expenses.length} Categories</span>
                     </h3>
                     <div className="h-64">
@@ -825,7 +642,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                     <p className="text-xs text-slate-400">Track M-Pesa, Bank Accounts, SACCO shares, and Money Market Funds</p>
                   </div>
                   <button
-                    onClick={() => setShowAccModal(true)}
+                    onClick={() => { setFormError(''); setShowAccModal(true); }}
                     className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 self-start"
                   >
                     <span>+</span> Add New Account
@@ -861,6 +678,23 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                         <span className="text-xs text-slate-400">Balance:</span>
                         <span className="text-lg font-extrabold text-emerald-400">{formatKES(acc.balance)}</span>
                       </div>
+                      <p className="text-xs text-slate-400 mt-2">Opening balance: {formatKES(acc.opening_balance ?? 0)}</p>
+                      {['bank_checking', 'bank_savings', 'sacco'].includes(acc.account_type) && (
+                        <button className="mt-2 text-xs text-teal-400 hover:underline self-start"
+                          onClick={() => setEditor({ kind: 'account', record: acc })}>
+                          {acc.account_identifier ? `SMS identifier ending ${acc.account_identifier.slice(-4)} (change)` : 'Set bank SMS identifier'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => { setFormError(''); setReconciliation({ account_id: String(acc.id), actual_balance: '', date: todayLocal(), reason: '' }); }}
+                        className="mt-3 text-xs text-emerald-400 hover:underline self-start"
+                      >
+                        Reconcile to statement balance
+                      </button>
+                      <div className="mt-3 flex gap-4 text-xs text-teal-300">
+                        <button type="button" onClick={() => setEditor({ kind: 'account', record: acc })}>Edit account</button>
+                        <button type="button" onClick={() => setHistory({ kind: 'account', id: acc.id, name: acc.name })}>History</button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -875,12 +709,12 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                     <h2 className="text-lg font-bold text-white">Transactions History</h2>
                     <p className="text-xs text-slate-400">All inflows, expenses, and savings transfers</p>
                   </div>
-                  {transactionsNeedingReview.length > 0 && (
+                  {needsReviewCount > 0 && (
                     <button
-                      onClick={() => setSelectedCategory('Needs review')}
+                      onClick={() => { setSelectedCategory('Needs review'); setTxPage(0); setTransactionsLoading(true); }}
                       className="text-xs font-semibold px-3 py-2 rounded-lg border border-amber-700/60 bg-amber-950/30 text-amber-300 hover:bg-amber-950/60"
                     >
-                      {transactionsNeedingReview.length} transfer{transactionsNeedingReview.length === 1 ? '' : 's'} need categorizing
+                      {needsReviewCount} transfer{needsReviewCount === 1 ? '' : 's'} need categorizing
                     </button>
                   )}
                   <button
@@ -896,14 +730,17 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                   <input
                     type="text"
                     placeholder="Search by description or reference..."
+                    aria-label="Search transaction history"
+                    maxLength={200}
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => { setSearchQuery(e.target.value); setTxPage(0); setTransactionsLoading(true); }}
                     className="flex-1 min-w-[200px] bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                   />
 
                   <select
                     value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    aria-label="Filter transaction category"
+                    onChange={(e) => { setSelectedCategory(e.target.value); setTxPage(0); setTransactionsLoading(true); }}
                     className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none"
                   >
                     <option value="All">All Categories</option>
@@ -915,7 +752,8 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
 
                   <select
                     value={selectedAccountId}
-                    onChange={(e) => setSelectedAccountId(e.target.value)}
+                    aria-label="Filter transaction account"
+                    onChange={(e) => { setSelectedAccountId(e.target.value); setTxPage(0); setTransactionsLoading(true); }}
                     className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none"
                   >
                     <option value="All">All Accounts</option>
@@ -923,8 +761,26 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                       <option key={a.id} value={String(a.id)}>{a.name}</option>
                     ))}
                   </select>
+                  <select aria-label="Filter transaction type" value={transactionType}
+                    onChange={(e) => { setTransactionType(e.target.value); setTxPage(0); setTransactionsLoading(true); }}
+                    className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-xs">
+                    <option value="All">All types</option><option value="income">Income</option><option value="expense">Expense</option>
+                    <option value="transfer">Transfer</option><option value="adjustment">Reconciliation</option>
+                  </select>
+                  <select aria-label="Filter transaction status" value={transactionStatus}
+                    onChange={(e) => { setTransactionStatus(e.target.value); setTxPage(0); setTransactionsLoading(true); }}
+                    className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-xs">
+                    <option value="active">Active transactions</option><option value="reversed">Reversed transactions (history)</option><option value="all">Active & reversed</option>
+                  </select>
+                  <label className="text-xs text-slate-400">From<input aria-label="Transaction start date" type="date" value={startDate}
+                    onChange={(e) => { setStartDate(e.target.value); setTxPage(0); setTransactionsLoading(true); }} className="ml-2 rounded-lg bg-slate-900 p-2" /></label>
+                  <label className="text-xs text-slate-400">To<input aria-label="Transaction end date" type="date" value={endDate}
+                    onChange={(e) => { setEndDate(e.target.value); setTxPage(0); setTransactionsLoading(true); }} className="ml-2 rounded-lg bg-slate-900 p-2" /></label>
                 </div>
 
+                {transactionError && <div role="alert" className="rounded-xl border border-rose-900 p-3 text-sm text-rose-300">
+                  {transactionError} <button type="button" onClick={() => { void loadTransactions(); }} className="ml-2 underline">Retry transactions</button>
+                </div>}
                 {/* Table */}
                 <div className="bg-[#111726] border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
                   <div className="overflow-x-auto">
@@ -937,18 +793,28 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                           <th className="py-3 px-4">Source Account</th>
                           <th className="py-3 px-4">Ref Code</th>
                           <th className="py-3 px-4 text-right">Amount</th>
+                          <th className="py-3 px-4">Maintenance</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60 font-mono">
-                        {filteredTransactions.length > 0 ? (
-                          filteredTransactions.map((t) => (
+                        {transactionsLoading || transactionError ? (
+                          <tr><td colSpan={7} className="p-6 text-center font-sans text-slate-400">
+                            {transactionsLoading ? 'Loading transaction history...' : 'Transaction history unavailable. Retry above.'}
+                          </td></tr>
+                        ) : transactions.length > 0 ? (
+                          transactions.map((t) => (
                             <tr key={t.id} className="hover:bg-slate-900/40 transition-colors">
                               <td className="py-3 px-4 whitespace-nowrap text-slate-400">{t.date}</td>
-                              <td className="py-3 px-4 font-sans font-medium text-white max-w-xs truncate">{t.description}</td>
+                              <td className="py-3 px-4 font-sans font-medium text-white max-w-xs">
+                                {t.description}
+                                {t.voided_at && <span className="block text-[10px] text-amber-300">Reversed - excluded from balances and reports</span>}
+                                {t.parent_transaction_id && <span className="block text-[10px] text-slate-500">Linked fee for transaction #{t.parent_transaction_id}</span>}
+                              </td>
                               <td className="py-3 px-4 font-sans">
-                                {t.type === 'transfer' && (!t.category || t.category.toLowerCase() === 'other') ? (
+                                {!t.voided_at && t.type === 'transfer' && (!t.category || t.category.toLowerCase() === 'other') ? (
                                   <select
                                     value=""
+                                    disabled={txSaving}
                                     onChange={(event) => void handleCategorizeTransaction(t.id, event.target.value)}
                                     className="bg-amber-950/40 border border-amber-700/60 rounded-full px-2 py-0.5 text-[11px] text-amber-300"
                                   >
@@ -963,18 +829,29 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                                   </span>
                                 )}
                               </td>
-                              <td className="py-3 px-4 font-sans text-slate-400">{t.account_name || 'Account'}</td>
+                              <td className="py-3 px-4 font-sans text-slate-400">
+                                {t.account_name || 'Account'}{t.transfer_account_name ? ` -> ${t.transfer_account_name}` : ''}
+                              </td>
                               <td className="py-3 px-4 text-slate-500 text-[11px]">{t.reference || '-'}</td>
                               <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${
                                 t.type === 'income' ? 'text-emerald-400' : t.type === 'expense' ? 'text-rose-400' : 'text-blue-400'
                               }`}>
-                                {t.type === 'income' ? '+' : t.type === 'expense' ? '-' : '⇄'} {formatKES(t.amount)}
+                                {t.type === 'income' ? '+' : t.type === 'expense' ? '-' :
+                                  t.type === 'adjustment' ? (t.amount >= 0 ? '+' : '-') : '⇄'} {formatKES(Math.abs(t.amount))}
+                              </td>
+                              <td className="py-3 px-4 font-sans">
+                                <div className="flex flex-col items-start gap-2 whitespace-nowrap text-teal-300">
+                                  {!t.parent_transaction_id && !t.voided_at && <button type="button" onClick={() => setEditor({ kind: 'transaction', record: t })}>
+                                    {t.type === 'adjustment' ? 'Reverse adjustment' : 'Edit / Reverse'}
+                                  </button>}
+                                  <button type="button" onClick={() => setHistory({ kind: 'transaction', id: t.id, name: t.description })}>History</button>
+                                </div>
                               </td>
                             </tr>
                           ))
                         ) : (
                           <tr>
-                            <td colSpan={6} className="py-8 text-center text-slate-500 font-sans">
+                            <td colSpan={7} className="py-8 text-center text-slate-500 font-sans">
                               No matching transactions found.
                             </td>
                           </tr>
@@ -982,107 +859,20 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                       </tbody>
                     </table>
                   </div>
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <button type="button" disabled={txPage === 0 || transactionsLoading} onClick={() => { setTxPage(txPage - 1); setTransactionsLoading(true); }}
+                      className="rounded-lg bg-slate-800 px-3 py-2 disabled:opacity-40">Previous</button>
+                    <span>{transactionError ? 'Count unavailable' : transactionsLoading ? 'Loading...' : `Page ${txPage + 1} | ${txTotal} matching transactions`}</span>
+                    <button type="button" disabled={!hasMoreTransactions || transactionsLoading || !!transactionError} onClick={() => { setTxPage(txPage + 1); setTransactionsLoading(true); }}
+                      className="rounded-lg bg-slate-800 px-3 py-2 disabled:opacity-40">Next</button>
+                  </div>
                 </div>
               </div>
             )}
 
             {/* TAB 4: M-PESA & CSV STATEMENT IMPORT */}
             {activeTab === 'import' && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-lg font-bold text-white">Import M-Pesa Statements & SMS Messages</h2>
-                  <p className="text-xs text-slate-400">
-                    Paste Safaricom SMS confirmations or statement text to automatically categorize and import transactions.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Left: Input Form */}
-                  <div className="lg:col-span-2 bg-[#111726] border border-slate-800 rounded-2xl p-5 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-semibold text-slate-300">Paste M-Pesa SMS or CSV text:</label>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleImportStatement('sms')}
-                          className="text-[11px] px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-emerald-400 font-medium"
-                        >
-                          Load Sample SMS
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleImportStatement('csv')}
-                          className="text-[11px] px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-teal-400 font-medium"
-                        >
-                          Load Sample CSV
-                        </button>
-                      </div>
-                    </div>
-
-                    <textarea
-                      rows={8}
-                      value={importText}
-                      onChange={(e) => setImportText(e.target.value)}
-                      placeholder={`Paste M-Pesa SMS confirmation messages here:\n\nQHL921KK89 Confirmed. Ksh3,200.00 sent to NAIVAS WESTLANDS on 22/10/26 at 11:45 AM...\nQHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10/26...`}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500"
-                    />
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-xs text-slate-400 block mb-1">Target Account to Credit/Debit</label>
-                        <select
-                          value={importAccountId}
-                          onChange={(e) => setImportAccountId(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
-                        >
-                          {accounts.map((a) => (
-                            <option key={a.id} value={String(a.id)}>
-                              {a.name} ({formatKES(a.balance)})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="flex items-end">
-                        <button
-                          disabled={importLoading}
-                          onClick={() => handleImportStatement()}
-                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                        >
-                          {importLoading ? 'Parsing & Ingesting...' : '📥 Parse & Import Into Account'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right: Explainer */}
-                  <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5 space-y-4">
-                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                      <span>💡</span> How Import Works
-                    </h3>
-                    <ul className="text-xs text-slate-300 space-y-3">
-                      <li className="flex items-start gap-2">
-                        <span className="text-emerald-400">✓</span>
-                        <span>
-                          <strong>Zero API dependencies:</strong> No need for Safaricom business paybills or live callbacks to track personal finances.
-                        </span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="text-emerald-400">✓</span>
-                        <span>
-                          <strong>Automatic Categorization:</strong> Identifies KPLC tokens, Naivas groceries, Rubis fuel, and Safaricom fibre automatically.
-                        </span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="text-emerald-400">✓</span>
-                        <span>
-                          <strong>Duplicate Protection:</strong> Safaricom receipt codes (e.g. <code>QHL921KK89</code>) prevent importing the same transaction twice.
-                        </span>
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
+              <ImportPanel accounts={accounts} categories={CATEGORIES_LIST} onChanged={() => loadAllData(false)} />
             )}
 
             {/* TAB 5: ASSETS & LIABILITIES (NET WORTH DETAILS) */}
@@ -1095,13 +885,13 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                   </div>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => setShowAssetModal(true)}
+                      onClick={() => { setFormError(''); setShowAssetModal(true); }}
                       className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg"
                     >
                       + Add Asset
                     </button>
                     <button
-                      onClick={() => setShowLiabModal(true)}
+                      onClick={() => { setFormError(''); setShowLiabModal(true); }}
                       className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg"
                     >
                       + Add Debt / Loan
@@ -1133,6 +923,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                               {asset.category}
                             </span>
                             {asset.notes && <p className="text-[11px] text-slate-500 mt-1">{asset.notes}</p>}
+                            <div className="mt-2 flex gap-4 text-xs text-teal-300">
+                              <button type="button" onClick={() => setEditor({ kind: 'asset', record: asset })}>Edit</button>
+                              <button type="button" onClick={() => setHistory({ kind: 'asset', id: asset.id, name: asset.name })}>History</button>
+                            </div>
                           </div>
                           <span className="text-sm font-extrabold text-emerald-400">
                             {formatKES(asset.estimated_value)}
@@ -1169,6 +963,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                                 Pay: {formatKES(liab.monthly_payment)}/mo
                               </p>
                             )}
+                            <div className="mt-2 flex gap-4 text-xs text-teal-300">
+                              <button type="button" onClick={() => setEditor({ kind: 'liability', record: liab })}>Edit</button>
+                              <button type="button" onClick={() => setHistory({ kind: 'liability', id: liab.id, name: liab.name })}>History</button>
+                            </div>
                           </div>
                           <div className="text-right">
                             <span className="text-sm font-extrabold text-rose-400">
@@ -1188,106 +986,80 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
 
             {/* TAB 6: BUDGETS & SAVINGS GOALS */}
             {activeTab === 'goals' && (
-              <div className="space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-bold text-white">Savings Goals & Monthly Budgets</h2>
-                    <p className="text-xs text-slate-400">Target funds for emergency safety, land purchase, and monthly category limits</p>
-                  </div>
-                  <button
-                    onClick={() => setShowGoalModal(true)}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 self-start"
-                  >
-                    <span>+</span> New Savings Goal
-                  </button>
-                </div>
-
-                {/* Savings Goals Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {goals.map((g) => {
-                    const percent = Math.min(100, (g.current_amount / g.target_amount) * 100);
-                    return (
-                      <div
-                        key={g.id}
-                        className="bg-[#111726] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-sm"
-                      >
-                        <div>
-                          <div className="flex items-center justify-between text-xs text-slate-400">
-                            <span>🎯 Target: {formatKES(g.target_amount)}</span>
-                            <span>{percent.toFixed(0)}%</span>
-                          </div>
-                          <h3 className="text-sm font-bold text-white mt-1">{g.name}</h3>
-
-                          <div className="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
-                            <div
-                              className="bg-gradient-to-r from-teal-500 to-emerald-400 h-full rounded-full transition-all"
-                              style={{ width: `${percent}%` }}
-                            ></div>
-                          </div>
-
-                          <div className="flex items-center justify-between text-xs mt-3">
-                            <span className="text-slate-400">Saved so far:</span>
-                            <span className="font-bold text-emerald-400">{formatKES(g.current_amount)}</span>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 pt-4 border-t border-slate-800 flex gap-2">
-                          <button
-                            onClick={() => handleContributeGoal(g.id, 5000)}
-                            className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs py-1.5 rounded-lg"
-                          >
-                            + KSh 5,000
-                          </button>
-                          <button
-                            onClick={() => handleContributeGoal(g.id, 20000)}
-                            className="flex-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 text-xs py-1.5 rounded-lg border border-emerald-500/30"
-                          >
-                            + KSh 20,000
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Monthly Budgets List */}
-                <div className="bg-[#111726] border border-slate-800 rounded-2xl p-5">
-                  <h3 className="text-sm font-bold text-white mb-4">Monthly Spending Limits by Kenyan Category</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {budgets.map((b) => (
-                      <div
-                        key={b.id}
-                        className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between"
-                      >
-                        <span className="text-xs font-semibold text-slate-200">{b.category}</span>
-                        <span className="text-xs font-mono font-bold text-emerald-400">
-                          {formatKES(b.monthly_limit)} / month
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
+              <PlanningPanel goals={goals} onCreateGoal={() => { setFormError(''); setShowGoalModal(true); }}
+                onEdit={setEditor} onHistory={setHistory} onChanged={() => loadAllData(false)} />
             )}
           </>
         )}
       </main>
 
+      {editor && <RecordEditor key={`${editor.kind}-${editor.record.id}`} selection={editor} accounts={accounts} categories={CATEGORIES_LIST}
+        onClose={() => setEditor(undefined)} onReload={async () => { setEditor(undefined); await loadAllData(false); }}
+        onSaved={async () => {
+          await loadAllData(false); setEditor(undefined); showToast('Change saved with history.');
+        }} />}
+      {history && <HistoryDialog key={`${history.kind}-${history.id}`} selection={history} onClose={() => setHistory(undefined)} />}
+
+      {reconciliation.account_id && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <h3 className="text-base font-bold text-white">Reconcile account balance</h3>
+            <p className="text-xs text-slate-400">
+              Import all history first. The difference is saved as an adjustment, not income or spending.
+            </p>
+            <form onSubmit={handleReconcile} className="space-y-3">
+              {formError && <p role="alert" className="text-sm text-rose-300">{formError}</p>}
+              <fieldset disabled={reconciling} className="contents">
+              <label className="block text-xs text-slate-400">
+                Actual statement balance (KES)
+                <input type="number" step="0.01" required value={reconciliation.actual_balance}
+                  onChange={(e) => setReconciliation({ ...reconciliation, actual_balance: e.target.value })}
+                  className="block w-full mt-1 bg-slate-900 rounded-lg p-2 text-white" />
+              </label>
+              <label className="block text-xs text-slate-400">
+                Statement date
+                <input type="date" required value={reconciliation.date}
+                  onChange={(e) => setReconciliation({ ...reconciliation, date: e.target.value })}
+                  className="block w-full mt-1 bg-slate-900 rounded-lg p-2 text-white" />
+              </label>
+              <label className="block text-xs text-slate-400">
+                Reason / statement reference
+                <input required maxLength={500} value={reconciliation.reason}
+                  onChange={(e) => setReconciliation({ ...reconciliation, reason: e.target.value })}
+                  className="block w-full mt-1 bg-slate-900 rounded-lg p-2 text-white" />
+              </label>
+              <div className="flex gap-3">
+                <button disabled={reconciling} className="bg-emerald-600 rounded-lg px-4 py-2 text-xs">
+                  {reconciling ? 'Saving...' : 'Record adjustment'}
+                </button>
+                <button type="button" disabled={reconciling}
+                  onClick={() => setReconciliation({ ...reconciliation, account_id: '' })}
+                  className="text-xs text-slate-400">Cancel</button>
+              </div>
+              </fieldset>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: ADD TRANSACTION */}
       {showTxModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white">Record Transaction</h3>
-              <button onClick={() => setShowTxModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button disabled={txSaving} onClick={() => setShowTxModal(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <form onSubmit={handleCreateTransaction} className="space-y-3">
+            <form aria-label="Record transaction" onSubmit={handleCreateTransaction} className="space-y-3">
+              {formError && <p role="alert" className="text-sm text-rose-300">{formError}</p>}
+              <fieldset disabled={txSaving} className="contents">
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Account</label>
                 <select
+                  aria-label="Transaction account"
                   value={newTx.account_id}
-                  onChange={(e) => setNewTx({ ...newTx, account_id: e.target.value })}
+                  onChange={(e) => setNewTx({ ...newTx, account_id: e.target.value, transfer_account_id: '' })}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
                 >
                   {accounts.map((a) => (
@@ -1300,8 +1072,9 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Type</label>
                   <select
+                    aria-label="Transaction type"
                     value={newTx.type}
-                    onChange={(e) => setNewTx({ ...newTx, type: e.target.value as TransactionType })}
+                    onChange={(e) => setNewTx({ ...newTx, type: e.target.value as TransactionType, transfer_account_id: '' })}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
                   >
                     <option value="expense">Expense</option>
@@ -1312,7 +1085,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Amount (KES)</label>
                   <input
+                    aria-label="Transaction amount"
                     type="number"
+                    min="0.01"
+                    step="0.01"
                     required
                     value={newTx.amount}
                     onChange={(e) => setNewTx({ ...newTx, amount: e.target.value })}
@@ -1322,11 +1098,34 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 </div>
               </div>
 
+              {newTx.type === 'transfer' && (
+                <label className="block text-xs text-slate-400">
+                  Destination wallet
+                  <select required value={newTx.transfer_account_id}
+                    onChange={(e) => setNewTx({ ...newTx, transfer_account_id: e.target.value })}
+                    className="block w-full mt-1 bg-slate-900 rounded-lg p-2 text-white">
+                    <option value="">Choose destination</option>
+                    {accounts.filter((a) => String(a.id) !== newTx.account_id).map((a) => (
+                      <option key={a.id} value={String(a.id)}>{a.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="block text-xs text-slate-400">
+                Fee charged to source wallet (KES)
+                <input type="number" min="0" step="0.01" value={newTx.fee_amount}
+                  aria-label="Transaction fee"
+                  onChange={(e) => setNewTx({ ...newTx, fee_amount: e.target.value })}
+                  placeholder="0" className="block w-full mt-1 bg-slate-900 rounded-lg p-2 text-white" />
+              </label>
+
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Description / Merchant</label>
                 <input
+                  aria-label="Transaction description"
                   type="text"
                   required
+                  maxLength={500}
                   value={newTx.description}
                   onChange={(e) => setNewTx({ ...newTx, description: e.target.value })}
                   placeholder="e.g. Naivas Supermarket Food"
@@ -1338,6 +1137,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Category</label>
                   <select
+                    aria-label="Transaction category"
                     value={newTx.category}
                     onChange={(e) => setNewTx({ ...newTx, category: e.target.value })}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
@@ -1350,7 +1150,9 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Date</label>
                   <input
+                    aria-label="Transaction date"
                     type="date"
+                    required
                     value={newTx.date}
                     onChange={(e) => setNewTx({ ...newTx, date: e.target.value })}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
@@ -1361,7 +1163,9 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Reference (M-Pesa / Bank Ref - Optional)</label>
                 <input
+                  aria-label="Transaction reference"
                   type="text"
+                  maxLength={100}
                   value={newTx.reference}
                   onChange={(e) => setNewTx({ ...newTx, reference: e.target.value })}
                   placeholder="e.g. QHL921KK89"
@@ -1371,10 +1175,12 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
 
               <button
                 type="submit"
+                disabled={txSaving}
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
               >
-                Save Transaction
+                {txSaving ? 'Saving...' : 'Save Transaction'}
               </button>
+              </fieldset>
             </form>
           </div>
         </div>
@@ -1386,13 +1192,16 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white">Add New Financial Account</h3>
-              <button onClick={() => setShowAccModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button disabled={formSaving} onClick={() => setShowAccModal(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <form onSubmit={handleCreateAccount} className="space-y-3">
+            <form aria-label="Create account" onSubmit={handleCreateAccount} className="space-y-3">
+              {formError && <p role="alert" className="text-sm text-rose-300">{formError}</p>}
+              <fieldset disabled={formSaving} className="contents">
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Account Name</label>
                 <input
+                  aria-label="Account name"
                   type="text"
                   required
                   value={newAcc.name}
@@ -1405,6 +1214,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Institution</label>
                 <input
+                  aria-label="Institution"
                   type="text"
                   value={newAcc.institution}
                   onChange={(e) => setNewAcc({ ...newAcc, institution: e.target.value })}
@@ -1417,6 +1227,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Account Type</label>
                   <select
+                    aria-label="Account type"
                     value={newAcc.account_type}
                     onChange={(e) => setNewAcc({ ...newAcc, account_type: e.target.value })}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
@@ -1430,10 +1241,12 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Starting Balance (KES)</label>
+                  <label className="text-xs text-slate-400 block mb-1">Opening balance before history (KES)</label>
                   <input
+                    aria-label="Opening balance"
                     type="number"
                     value={newAcc.balance}
+                    step="0.01"
                     onChange={(e) => setNewAcc({ ...newAcc, balance: e.target.value })}
                     placeholder="0"
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
@@ -1441,12 +1254,24 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 </div>
               </div>
 
+              <p className="text-xs text-slate-400">
+                Usually start at zero, import all history, then reconcile to your statement. Do not enter today&apos;s balance before importing older movements.
+              </p>
+              {['bank_checking', 'bank_savings', 'sacco'].includes(newAcc.account_type) && (
+                <label className="block text-xs text-slate-400">
+                  Account digits shown in bank SMS (optional)
+                  <input className="block w-full mt-1 bg-slate-900 rounded-lg p-2 text-white" maxLength={40}
+                    value={newAcc.account_identifier} onChange={(e) => setNewAcc({ ...newAcc, account_identifier: e.target.value })}
+                    placeholder="At least four visible trailing digits" />
+                </label>
+              )}
               <button
                 type="submit"
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
               >
-                Create Account
+                {formSaving ? 'Saving...' : 'Create Account'}
               </button>
+              </fieldset>
             </form>
           </div>
         </div>
@@ -1458,13 +1283,16 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white">Add Physical / Fixed Asset</h3>
-              <button onClick={() => setShowAssetModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button disabled={formSaving} onClick={() => setShowAssetModal(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <form onSubmit={handleCreateAsset} className="space-y-3">
+            <form aria-label="Create asset" onSubmit={handleCreateAsset} className="space-y-3">
+              {formError && <p role="alert" className="text-sm text-rose-300">{formError}</p>}
+              <fieldset disabled={formSaving} className="contents">
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Asset Name</label>
                 <input
+                  aria-label="Asset name"
                   type="text"
                   required
                   value={newAsset.name}
@@ -1478,6 +1306,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Category</label>
                   <select
+                    aria-label="Asset category"
                     value={newAsset.category}
                     onChange={(e) => setNewAsset({ ...newAsset, category: e.target.value })}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
@@ -1487,12 +1316,17 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                     <option value="vehicle">Motor Vehicle</option>
                     <option value="investments">NSE Stocks / Bonds</option>
                     <option value="valuables">Valuables & Tech</option>
+                    <option value="livestock">Livestock</option>
+                    <option value="other">Other asset</option>
                   </select>
                 </div>
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Valuation (KES)</label>
                   <input
+                    aria-label="Asset valuation"
                     type="number"
+                    min="0"
+                    step="0.01"
                     required
                     value={newAsset.estimated_value}
                     onChange={(e) => setNewAsset({ ...newAsset, estimated_value: e.target.value })}
@@ -1517,8 +1351,9 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 type="submit"
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
               >
-                Save Asset to Balance Sheet
+                {formSaving ? 'Saving...' : 'Save Asset to Balance Sheet'}
               </button>
+              </fieldset>
             </form>
           </div>
         </div>
@@ -1530,13 +1365,16 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white">Record Liability / Debt</h3>
-              <button onClick={() => setShowLiabModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button disabled={formSaving} onClick={() => setShowLiabModal(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <form onSubmit={handleCreateLiability} className="space-y-3">
+            <form aria-label="Create liability" onSubmit={handleCreateLiability} className="space-y-3">
+              {formError && <p role="alert" className="text-sm text-rose-300">{formError}</p>}
+              <fieldset disabled={formSaving} className="contents">
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Loan / Liability Name</label>
                 <input
+                  aria-label="Liability name"
                   type="text"
                   required
                   value={newLiab.name}
@@ -1549,6 +1387,7 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Creditor Institution</label>
                 <input
+                  aria-label="Creditor"
                   type="text"
                   value={newLiab.creditor}
                   onChange={(e) => setNewLiab({ ...newLiab, creditor: e.target.value })}
@@ -1561,7 +1400,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Outstanding Balance (KES)</label>
                   <input
+                    aria-label="Outstanding balance"
                     type="number"
+                    min="0"
+                    step="0.01"
                     required
                     value={newLiab.outstanding_balance}
                     onChange={(e) => setNewLiab({ ...newLiab, outstanding_balance: e.target.value })}
@@ -1572,7 +1414,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Monthly Payment (KES)</label>
                   <input
+                    aria-label="Monthly payment"
                     type="number"
+                    min="0"
+                    step="0.01"
                     value={newLiab.monthly_payment}
                     onChange={(e) => setNewLiab({ ...newLiab, monthly_payment: e.target.value })}
                     placeholder="e.g. 15000"
@@ -1585,8 +1430,9 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 type="submit"
                 className="w-full bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
               >
-                Record Liability
+                {formSaving ? 'Saving...' : 'Record Liability'}
               </button>
+              </fieldset>
             </form>
           </div>
         </div>
@@ -1598,13 +1444,17 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
           <div className="bg-[#111726] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white">Create Savings Goal</h3>
-              <button onClick={() => setShowGoalModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button disabled={formSaving} onClick={() => setShowGoalModal(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <form onSubmit={handleCreateGoal} className="space-y-3">
+            <form aria-label="Create savings goal" onSubmit={handleCreateGoal} className="space-y-3">
+              {formError && <p role="alert" className="text-sm text-rose-300">{formError}</p>}
+              <p className="text-xs text-slate-400">Initial savings are an earmark of existing money, not a deposit. No wallet balances change.</p>
+              <fieldset disabled={formSaving} className="contents">
               <div>
                 <label className="text-xs text-slate-400 block mb-1">Goal Name</label>
                 <input
+                  aria-label="Goal name"
                   type="text"
                   required
                   value={newGoal.name}
@@ -1618,7 +1468,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Target Amount (KES)</label>
                   <input
+                    aria-label="Goal target"
                     type="number"
+                    min="0.01"
+                    step="0.01"
                     required
                     value={newGoal.target_amount}
                     onChange={(e) => setNewGoal({ ...newGoal, target_amount: e.target.value })}
@@ -1629,7 +1482,10 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Initial Saved (KES)</label>
                   <input
+                    aria-label="Initial earmark"
                     type="number"
+                    min="0"
+                    step="0.01"
                     value={newGoal.current_amount}
                     onChange={(e) => setNewGoal({ ...newGoal, current_amount: e.target.value })}
                     placeholder="0"
@@ -1638,12 +1494,17 @@ QHK9902188 Confirmed. You have received Ksh25,000.00 from PETER NJOROGE on 21/10
                 </div>
               </div>
 
+              <label className="block text-xs text-slate-400">Target date (optional)
+                <input type="date" value={newGoal.target_date} onChange={(e) => setNewGoal({ ...newGoal, target_date: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white" />
+              </label>
               <button
                 type="submit"
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg mt-3"
               >
-                Create Goal
+                {formSaving ? 'Saving...' : 'Create Goal'}
               </button>
+              </fieldset>
             </form>
           </div>
         </div>

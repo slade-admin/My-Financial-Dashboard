@@ -11,6 +11,7 @@ import {
   deleteIngestToken,
 } from '@/lib/repo/auth';
 import { apiError } from '@/lib/errors';
+import { objectInput, queryInteger, textInput } from '@/lib/validation';
 
 export async function GET() {
   try {
@@ -26,14 +27,8 @@ export async function POST(req: NextRequest) {
   try {
     const uid = await currentUserId();
 
-    let label: string | undefined;
-    try {
-      const body = await req.json() as Record<string, string>;
-      label = body.label;
-    } catch {
-      // label is optional — ignore parse error
-    }
-
+    const body = objectInput(await req.json());
+    const label = textInput(body.label, 'Token label', 100, true);
     const { token, row } = await createIngestToken(uid, label);
 
     // token is the plaintext — only returned once
@@ -46,8 +41,8 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const uid = await currentUserId();
-    const id = Number(req.nextUrl.searchParams.get('id'));
-    if (!id || isNaN(id)) {
+    const id = queryInteger(req.nextUrl.searchParams.get('id'), 0, 'Token id');
+    if (!id) {
       return NextResponse.json({ error: 'Missing token id' }, { status: 400 });
     }
     await deleteIngestToken(uid, id);

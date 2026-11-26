@@ -1,4 +1,5 @@
 import { Pool, types } from 'pg';
+import { DatabaseUnavailableError } from './errors';
 
 /**
  * Return SQL DATE columns as plain 'YYYY-MM-DD' strings.
@@ -22,22 +23,27 @@ let pool: Pool | null = null;
 
 export function getPool(): Pool {
   if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not defined in environment variables. Database connection cannot be established.');
+    throw new DatabaseUnavailableError();
   }
   if (!pool) {
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       connectionTimeoutMillis: 5000,
     });
+    pool.on('error', (error) => {
+      console.error('Idle PostgreSQL connection lost', { code: (error as { code?: string }).code });
+    });
   }
   return pool;
 }
 
-export async function query(text: string, params?: unknown[]) {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not defined in environment variables. Database connection is required.');
-  }
+export async function closePool(): Promise<void> {
+  const current = pool;
+  pool = null;
+  await current?.end();
+}
 
+export async function query(text: string, params?: unknown[]) {
   const p = getPool();
   const start = Date.now();
   try {
@@ -46,7 +52,7 @@ export async function query(text: string, params?: unknown[]) {
     console.log('Executed query', { text: text.substring(0, 50), duration, rows: res.rowCount });
     return res;
   } catch (error) {
-    console.error('Database query error:', error);
+    console.error('Database query failed', { code: (error as { code?: string }).code });
     throw error;
   }
 }

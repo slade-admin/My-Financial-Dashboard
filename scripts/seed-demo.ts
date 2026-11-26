@@ -405,7 +405,7 @@ async function seed() {
       const r = await pool.query(
         `INSERT INTO transactions (user_id, account_id, amount, currency, type, date, description, category, reference, import_source)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (user_id, reference) DO NOTHING`,
+         ON CONFLICT (user_id, reference) WHERE voided_at IS NULL DO NOTHING`,
         [uid, accId, tx.amount, tx.currency, tx.type, tx.date, tx.description, tx.category, tx.reference, tx.import_source],
       );
       added.transactions += r.rowCount ?? 0;

@@ -1,245 +1,242 @@
-import fs from 'fs';
-import path from 'path';
-import { Pool } from 'pg';
-import { addAccount, getAccounts } from '../src/lib/repo/accounts';
-import { addTransaction } from '../src/lib/repo/transactions';
-import { addAsset } from '../src/lib/repo/assets';
-import { addLiability } from '../src/lib/repo/liabilities';
-import { addBudget } from '../src/lib/repo/budgets';
-import { addSavingsGoal, updateSavingsGoal } from '../src/lib/repo/savings-goals';
-import { getNetWorthMetrics } from '../src/lib/repo/networth';
-import { loadLocalEnv, maskUrl } from './load-env';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { test } from 'node:test';
+import { addAccount, getAccountById, getAccounts } from '../src/lib/repo/accounts';
+import {
+  addTransaction,
+  getTransactions,
+  updateTransactionCategory,
+} from '../src/lib/repo/transactions';
+import { addAsset, getAssets } from '../src/lib/repo/assets';
+import { addLiability, getLiabilities } from '../src/lib/repo/liabilities';
+import { addBudget, getBudgets } from '../src/lib/repo/budgets';
+import {
+  addSavingsGoal,
+  getSavingsGoals,
+  updateSavingsGoal,
+} from '../src/lib/repo/savings-goals';
+import { getExpensesByCategory, getNetWorthMetrics } from '../src/lib/repo/networth';
+import { PersonalTransaction, todayLocal } from '../src/lib/repo/types';
+import { createTestUser, withTestDatabase } from './test-db';
 
-type SchemaColumn = {
-  table_name: string;
-  column_name: string;
-  data_type: string;
-  numeric_precision: number | null;
-  numeric_scale: number | null;
-};
+process.env.TZ = 'Africa/Nairobi';
 
-type PgError = Error & { message: string };
-
-async function runTests() {
-  // .env.local is not auto-loaded for tsx scripts the way `next dev` loads it.
-  // The hardcoded fallback connection string that used to live here was a
-  // silent fallback of exactly the kind Phase 0 removed.
-  loadLocalEnv();
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error('ERROR: DATABASE_URL is required. Set it in .env.local or pass it inline.');
-    process.exit(1);
-  }
-  console.log(`[Phase 1 Test] Connecting to PostgreSQL at: ${maskUrl(databaseUrl)}`);
-
-  const pool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
-
-  try {
-    await pool.query('SELECT 1');
-    console.log('✓ Successfully connected to PostgreSQL');
-  } catch (err) {
-    const error = err as PgError;
-    console.error('✗ Failed to connect to PostgreSQL:', error.message);
-    console.error('  Ensure Docker Postgres container is running: docker compose up -d');
-    process.exit(1);
-  }
-
-  try {
-    // 1. Run migrations / apply schema
-    console.log('\n--- 1. Applying Schema & Migrations ---');
-    const schemaFile = path.join(process.cwd(), 'migrations', 'schema.sql');
-    if (!fs.existsSync(schemaFile)) {
-      throw new Error(`Migration schema file not found at ${schemaFile}`);
-    }
-    const schemaSql = fs.readFileSync(schemaFile, 'utf8');
-    await pool.query(schemaSql);
-    console.log('✓ migrations/schema.sql applied successfully');
-
-    // 2. Validate columns and types
-    console.log('\n--- 2. Validating Schema Constraints & NUMERIC(16,2) Precision ---');
-    const colsRes = await pool.query(`
-      SELECT table_name, column_name, data_type, numeric_precision, numeric_scale
-      FROM information_schema.columns
-      WHERE table_name IN ('accounts', 'transactions')
-        AND column_name IN ('user_id', 'current_balance', 'amount')
-      ORDER BY table_name, column_name;
-    `);
-
-    const colMap = new Map<string, SchemaColumn>();
-    for (const r of colsRes.rows) {
-      colMap.set(`${r.table_name}.${r.column_name}`, r);
-    }
-
-    if (!colMap.has('accounts.user_id') || !colMap.has('transactions.user_id')) {
-      throw new Error('user_id column missing from accounts or transactions');
-    }
-    console.log('✓ user_id column verified on accounts and transactions');
-
-    const accBalance = colMap.get('accounts.current_balance');
-    const txAmount = colMap.get('transactions.amount');
-    if (!accBalance || !txAmount) {
-      throw new Error('current_balance or amount column metadata missing');
-    }
-    if (accBalance.data_type !== 'numeric' || txAmount.data_type !== 'numeric') {
-      throw new Error('current_balance or amount is not numeric');
-    }
-    console.log(`✓ Stored as NUMERIC(16,2): accounts.current_balance (${accBalance.numeric_precision},${accBalance.numeric_scale}), transactions.amount (${txAmount.numeric_precision},${txAmount.numeric_scale})`);
-
-    // Check unique constraint on (user_id, reference)
-    const constraintRes = await pool.query(`
-      SELECT conname
-      FROM pg_constraint
-      WHERE conrelid = 'transactions'::regclass
-        AND contype = 'u';
-    `);
-    const hasUniqueRef = constraintRes.rows.some((r: { conname: string }) =>
-      r.conname.includes('reference') || r.conname.includes('user_reference')
-    );
-    if (!hasUniqueRef) {
-      throw new Error('Unique constraint on transactions(user_id, reference) missing');
-    }
-    console.log('✓ Unique constraint verified on transactions(user_id, reference)');
-
-    // Ensure test user 1 exists
-    await pool.query(`
-      INSERT INTO users (id, email, full_name, phone_number, country)
-      VALUES (1, 'testuser@dashboard.ke', 'Test User', '+254700000000', 'KE')
-      ON CONFLICT (id) DO NOTHING;
-    `);
-
-    const testUserId = 1;
-
-    // 3. Test Atomic Transaction & Balance Update
-    console.log('\n--- 3. Testing Atomic Account & Transaction Persistence ---');
-    const testAccount = await addAccount(testUserId, {
-      name: `Test M-Pesa Account ${Date.now()}`,
-      institution: 'Safaricom',
-      account_type: 'mobile_money',
-      currency: 'KES',
-      balance: 1000.0,
-      is_asset: true,
-    });
-    console.log(`✓ Created account ID ${testAccount.id} with balance: KES ${testAccount.balance}`);
-
-    const uniqueReceiptRef = `TESTREC${Date.now().toString().slice(-6)}`;
-
-    // Add income transaction: 500.00
-    const tx1 = await addTransaction(testUserId, {
-      account_id: testAccount.id,
-      amount: 500.0,
-      currency: 'KES',
-      type: 'income',
-      date: new Date().toISOString().split('T')[0],
-      description: 'Customer Payment Received',
-      category: 'Freelance & Business',
-      reference: uniqueReceiptRef,
-      import_source: 'mpesa_statement',
-    });
-
-    if (tx1.isDuplicate) {
-      throw new Error('Initial transaction marked as duplicate incorrectly');
-    }
-    console.log(`✓ Inserted transaction ${tx1.transaction.id} (ref: ${uniqueReceiptRef})`);
-
-    // Verify account balance updated atomically
-    const accAfterTx1 = (await getAccounts(testUserId)).find((a) => String(a.id) === String(testAccount.id));
-    if (!accAfterTx1 || accAfterTx1.balance !== 1500.0) {
-      throw new Error(`Expected balance 1500.00, got ${accAfterTx1?.balance}`);
-    }
-    console.log(`✓ Atomic balance update verified: 1000.00 + 500.00 = KES ${accAfterTx1.balance}`);
-
-    // 4. Test Deduplication / Idempotency
-    console.log('\n--- 4. Testing Acceptance: Importing Same Receipt Twice ---');
-    const duplicateAttempt = await addTransaction(testUserId, {
-      account_id: testAccount.id,
-      amount: 500.0,
-      currency: 'KES',
-      type: 'income',
-      date: new Date().toISOString().split('T')[0],
-      description: 'Customer Payment Received (Duplicate Re-import)',
-      category: 'Freelance & Business',
-      reference: uniqueReceiptRef,
-      import_source: 'mpesa_statement',
-    });
-
-    if (!duplicateAttempt.isDuplicate) {
-      throw new Error('Duplicate receipt was not recognized as duplicate');
-    }
-    console.log('✓ Duplicate receipt detected (isDuplicate = true)');
-
-    // Verify only ONE transaction exists in DB for this receipt
-    const txCountRes = await pool.query(
-      'SELECT COUNT(*)::int AS count FROM transactions WHERE user_id = $1 AND reference = $2',
-      [testUserId, uniqueReceiptRef]
-    );
-    if (txCountRes.rows[0].count !== 1) {
-      throw new Error(`Expected exactly 1 transaction in DB, found ${txCountRes.rows[0].count}`);
-    }
-    console.log(`✓ Verified DB count for reference ${uniqueReceiptRef}: exactly 1 transaction`);
-
-    // Verify balance was NOT updated again
-    const accAfterDuplicate = (await getAccounts(testUserId)).find((a) => String(a.id) === String(testAccount.id));
-    if (!accAfterDuplicate || accAfterDuplicate.balance !== 1500.0) {
-      throw new Error(`Balance was corrupted on duplicate: expected 1500.00, got ${accAfterDuplicate?.balance}`);
-    }
-    console.log(`✓ Account balance remained unchanged on duplicate: KES ${accAfterDuplicate.balance}`);
-
-    // 5. Test Assets, Liabilities, Budgets, and Savings Goals
-    console.log('\n--- 5. Testing Other Entities Persistence ---');
-    const asset = await addAsset(testUserId, {
-      name: 'Plot in Kitengela',
-      category: 'land',
-      estimated_value: 1200000.0,
-      currency: 'KES',
-      notes: '50x100 prime land',
-    });
-    console.log(`✓ Asset persisted: ${asset.name} (Value: KES ${asset.estimated_value})`);
-
-    const liability = await addLiability(testUserId, {
-      name: 'SACCO Development Loan',
-      creditor: 'Stima SACCO',
-      category: 'sacco_loan',
-      principal_amount: 300000.0,
-      outstanding_balance: 240000.0,
-      interest_rate: 12.0,
-      monthly_payment: 15000.0,
-      currency: 'KES',
-    });
-    console.log(`✓ Liability persisted: ${liability.name} (Balance: KES ${liability.outstanding_balance})`);
-
-    const budget = await addBudget(testUserId, {
-      category: 'Food & Groceries',
-      monthly_limit: 25000.0,
-      currency: 'KES',
-    });
-    console.log(`✓ Budget persisted: ${budget.category} (Limit: KES ${budget.monthly_limit})`);
-
-    const goal = await addSavingsGoal(testUserId, {
-      name: 'Emergency Fund 6 Months',
-      target_amount: 500000.0,
-      current_amount: 150000.0,
-      currency: 'KES',
-    });
-    console.log(`✓ Savings goal persisted: ${goal.name} (Target: KES ${goal.target_amount})`);
-
-    const updatedGoal = await updateSavingsGoal(testUserId, goal.id, 20000.0);
-    if (!updatedGoal || updatedGoal.current_amount !== 170000.0) {
-      throw new Error(`Expected updated goal amount 170000.0, got ${updatedGoal?.current_amount}`);
-    }
-    console.log(`✓ Savings goal updated: KES ${updatedGoal.current_amount}`);
-
-    const metrics = await getNetWorthMetrics(testUserId);
-    console.log(`✓ Net Worth computed correctly: KES ${metrics.netWorth} (Assets: KES ${metrics.totalAssets}, Liabilities: KES ${metrics.totalLiabilities})`);
-
-    console.log('\n======================================================');
-    console.log('✓ ALL PHASE 1 ACCEPTANCE CRITERIA VERIFIED SUCCESSFULLY!');
-    console.log('======================================================\n');
-  } catch (err) {
-    console.error('\n✗ Test failed:', err);
-    process.exit(1);
-  } finally {
-    await pool.end();
-  }
+function account(userId: number, balance = 1000) {
+  return addAccount(userId, {
+    name: 'Test Wallet',
+    institution: 'Test',
+    account_type: 'mobile_money',
+    currency: 'KES',
+    balance,
+    is_asset: true,
+  });
 }
 
-runTests();
+function transaction(
+  accountId: string | number,
+  overrides: Partial<Omit<PersonalTransaction, 'id'>> = {},
+): Omit<PersonalTransaction, 'id'> {
+  return {
+    account_id: accountId,
+    amount: 500.25,
+    currency: 'KES',
+    type: 'income',
+    date: todayLocal(),
+    description: 'Test transaction',
+    category: 'Salary & Primary Income',
+    reference: randomUUID(),
+    import_source: 'manual',
+    ...overrides,
+  };
+}
+
+test('financial persistence', async (t) => {
+  await withTestDatabase(async ({ pool }) => {
+    await t.test('income and expenses persist with exact balance updates', async () => {
+      const userId = await createTestUser(pool);
+      const wallet = await account(userId);
+      const income = await addTransaction(userId, transaction(wallet.id));
+      const expense = await addTransaction(userId, transaction(wallet.id, {
+        type: 'expense',
+        amount: 125.10,
+        category: 'Food & Groceries',
+      }));
+
+      assert.equal(income.isDuplicate, false);
+      assert.equal(expense.isDuplicate, false);
+      assert.equal((await getAccountById(userId, wallet.id))?.balance, 1375.15);
+      const saved = await getTransactions(userId);
+      assert.equal(saved.length, 2);
+      assert.equal(saved.find((tx) => tx.id === income.transaction.id)?.amount, 500.25);
+      assert.equal(saved.find((tx) => tx.id === expense.transaction.id)?.amount, 125.10);
+    });
+
+    await t.test('concurrent receipt retries insert once and change the balance once', async () => {
+      const userId = await createTestUser(pool);
+      const wallet = await account(userId);
+      const input = transaction(wallet.id, { import_source: 'mpesa_sms' });
+      const results = await Promise.all([
+        addTransaction(userId, input),
+        addTransaction(userId, input),
+        addTransaction(userId, input),
+      ]);
+
+      assert.equal(results.filter((result) => !result.isDuplicate).length, 1);
+      assert.equal(new Set(results.map((result) => result.transaction.id)).size, 1);
+      assert.equal((await getTransactions(userId)).length, 1);
+      assert.equal((await getAccountById(userId, wallet.id))?.balance, 1500.25);
+    });
+
+    await t.test('failed inserts leave no transaction, balance change or reserved receipt', async () => {
+      const userId = await createTestUser(pool);
+      const wallet = await account(userId);
+      const input = transaction(wallet.id);
+
+      await assert.rejects(
+        addTransaction(userId, { ...input, description: 'x'.repeat(501) }),
+        /Description.*500 characters/,
+      );
+      await pool.query(`
+        CREATE FUNCTION fail_test_transaction_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'Intentional insert failure'; END $$;
+        CREATE TRIGGER fail_test_transaction_insert BEFORE INSERT ON transactions
+          FOR EACH ROW EXECUTE FUNCTION fail_test_transaction_insert();
+      `);
+      try {
+        await assert.rejects(addTransaction(userId, input), { code: 'P0001' });
+      } finally {
+        await pool.query('DROP TRIGGER fail_test_transaction_insert ON transactions; DROP FUNCTION fail_test_transaction_insert();');
+      }
+      assert.equal((await getTransactions(userId)).length, 0);
+      assert.equal((await getAccountById(userId, wallet.id))?.balance, 1000);
+      assert.equal((await addTransaction(userId, input)).isDuplicate, false);
+      assert.equal((await getAccountById(userId, wallet.id))?.balance, 1500.25);
+    });
+
+    await t.test('a failed balance update rolls back the already-inserted transaction', async () => {
+      const userId = await createTestUser(pool);
+      const wallet = await account(userId);
+      const input = transaction(wallet.id);
+      await pool.query(`
+        CREATE FUNCTION fail_test_balance_update() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          RAISE EXCEPTION 'Intentional balance update failure';
+        END;
+        $$;
+        CREATE TRIGGER fail_test_balance_update
+        BEFORE UPDATE OF current_balance ON accounts
+        FOR EACH ROW EXECUTE FUNCTION fail_test_balance_update();
+      `);
+      try {
+        await assert.rejects(addTransaction(userId, input), { code: 'P0001' });
+        assert.equal((await getTransactions(userId)).length, 0);
+        assert.equal((await getAccountById(userId, wallet.id))?.balance, 1000);
+      } finally {
+        await pool.query(`
+          DROP TRIGGER fail_test_balance_update ON accounts;
+          DROP FUNCTION fail_test_balance_update();
+        `);
+      }
+      assert.equal((await addTransaction(userId, input)).isDuplicate, false);
+      assert.equal((await getAccountById(userId, wallet.id))?.balance, 1500.25);
+    });
+
+    await t.test('users cannot read or alter each other\'s transactions and accounts', async () => {
+      const ownerId = await createTestUser(pool);
+      const otherId = await createTestUser(pool);
+      const ownerWallet = await account(ownerId);
+      const otherWallet = await account(otherId, 700);
+      const reference = randomUUID();
+      const ownerTx = await addTransaction(ownerId, transaction(ownerWallet.id, {
+        type: 'expense', amount: 25, category: 'Food & Groceries', reference,
+      }));
+      const otherTx = await addTransaction(otherId, transaction(otherWallet.id, {
+        amount: 40, reference,
+      }));
+
+      assert.equal(otherTx.isDuplicate, false);
+      assert.notEqual(ownerTx.transaction.id, otherTx.transaction.id);
+      assert.deepEqual((await getAccounts(ownerId)).map((a) => a.id), [ownerWallet.id]);
+      assert.equal(await getAccountById(ownerId, otherWallet.id), null);
+      assert.deepEqual(
+        (await getTransactions(ownerId)).map((tx) => tx.id),
+        [ownerTx.transaction.id],
+      );
+      assert.deepEqual(await getTransactions(ownerId, { accountId: otherWallet.id }), []);
+      assert.equal(
+        await updateTransactionCategory(ownerId, otherTx.transaction.id, 'Other'),
+        null,
+      );
+      await assert.rejects(
+        addTransaction(ownerId, transaction(otherWallet.id)),
+        /not found for user/,
+      );
+      assert.equal((await getAccountById(otherId, otherWallet.id))?.balance, 740);
+      assert.equal((await getNetWorthMetrics(ownerId)).netWorth, 975);
+      assert.equal((await getExpensesByCategory(ownerId))[0]?.total_amount, 25);
+    });
+
+    await t.test('transfer categorization does not turn own-money movement into cash flow', async () => {
+      const userId = await createTestUser(pool);
+      const wallet = await account(userId);
+      const destination = await account(userId, 0);
+      await addTransaction(userId, transaction(wallet.id, { amount: 100 }));
+      await addTransaction(userId, transaction(wallet.id, {
+        type: 'expense', amount: 40, category: 'Food & Groceries',
+      }));
+      const transfer = await addTransaction(userId, transaction(wallet.id, {
+        type: 'transfer', amount: 250, category: 'Other', transfer_account_id: destination.id,
+      }));
+      const reviewed = await updateTransactionCategory(
+        userId, transfer.transaction.id, 'Savings & MMF Deposit',
+      );
+      assert.equal(reviewed?.type, 'transfer');
+      assert.equal(reviewed?.category, 'Savings & MMF Deposit');
+      const metrics = await getNetWorthMetrics(userId);
+      assert.equal(metrics.monthlyIncome, 100);
+      assert.equal(metrics.monthlyExpenses, 40);
+      assert.equal(metrics.netSavings, 60);
+      assert.equal(metrics.savingsRate, 60);
+      const spending = await getExpensesByCategory(userId);
+      assert.equal(spending.length, 1);
+      assert.equal(spending[0].category, 'Food & Groceries');
+      assert.equal(spending[0].total_amount, 40);
+    });
+
+    await t.test('assets, debts, budgets and goals persist with verified net-worth totals', async () => {
+      const userId = await createTestUser(pool);
+      const otherId = await createTestUser(pool);
+      await account(userId);
+      const asset = await addAsset(userId, {
+        name: 'Test Asset', category: 'other', estimated_value: 1200, currency: 'KES',
+      });
+      const liability = await addLiability(userId, {
+        name: 'Test Loan', creditor: 'Test', category: 'personal_loan',
+        principal_amount: 300, outstanding_balance: 240, currency: 'KES',
+      });
+      const budget = await addBudget(userId, {
+        category: 'Food & Groceries', monthly_limit: 25, currency: 'KES',
+      });
+      const goal = await addSavingsGoal(userId, {
+        name: 'Test Goal', target_amount: 500, current_amount: 150, currency: 'KES',
+      });
+      assert.equal(await updateSavingsGoal(otherId, goal.id, 20), null);
+      assert.equal((await updateSavingsGoal(userId, goal.id, 20))?.current_amount, 170);
+      assert.equal((await getAssets(userId))[0]?.id, asset.id);
+      assert.equal((await getLiabilities(userId))[0]?.id, liability.id);
+      assert.equal((await getBudgets(userId))[0]?.id, budget.id);
+      assert.equal((await getSavingsGoals(userId))[0]?.current_amount, 170);
+      assert.deepEqual(await getAssets(otherId), []);
+      assert.deepEqual(await getLiabilities(otherId), []);
+      assert.deepEqual(await getBudgets(otherId), []);
+      assert.deepEqual(await getSavingsGoals(otherId), []);
+      const metrics = await getNetWorthMetrics(userId);
+      assert.equal(metrics.liquidCash, 1000);
+      assert.equal(metrics.physicalAssets, 1200);
+      assert.equal(metrics.totalAssets, 2200);
+      assert.equal(metrics.totalLiabilities, 240);
+      assert.equal(metrics.netWorth, 1960);
+    });
+  });
+});

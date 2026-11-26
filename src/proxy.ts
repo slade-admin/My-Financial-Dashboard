@@ -17,7 +17,7 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { SESSION_COOKIE } from '@/lib/session';
+import { SESSION_COOKIE } from '@/lib/session-cookie';
 
 // Endpoints that do NOT require a session cookie.
 //
@@ -51,11 +51,6 @@ export function proxy(request: NextRequest) {
 
   // ── Page routes ───────────────────────────────────────────────────────────
   const isPublicPage = PUBLIC_PAGES.some((p) => pathname === p || pathname.startsWith(p + '/'));
-
-  // Already authenticated → redirect away from login/signup
-  if (hasSession && isPublicPage) {
-    return NextResponse.redirect(new URL('/', request.url));
-  }
 
   // Not authenticated → redirect to login
   if (!hasSession && !isPublicPage) {
