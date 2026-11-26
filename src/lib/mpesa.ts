@@ -15,7 +15,7 @@
  * which is M-Pesa's receipt number and unique per transaction — the
  * transactions table enforces UNIQUE (user_id, reference).
  */
-import { toMoney } from './repo/types';
+import { todayLocal } from './repo/types';
 
 export type MpesaKind =
   | 'send'
@@ -42,17 +42,20 @@ export interface ParsedMpesaMessage {
   balance?: number;
   /** "Transaction cost, Ksh..." when present. Charged on top of `amount`. */
   cost?: number;
+  dateInferred?: boolean;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** "1,234.50" → 1234.5 */
 function money(raw: string): number {
-  return toMoney(parseFloat(raw.replace(/,/g, '')));
+  if (!/^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$/.test(raw)) return NaN;
+  return Number(raw.replace(/,/g, ''));
 }
 
 /** M-Pesa prints d/m/yy. Convert to ISO yyyy-mm-dd. */
 export function mpesaDateToIso(raw: string, today = new Date()): string {
+  if (!raw.trim()) return todayLocal(today);
   const parts = raw.split('/');
   if (parts.length === 3) {
     const day = parts[0].padStart(2, '0');
@@ -60,10 +63,12 @@ export function mpesaDateToIso(raw: string, today = new Date()): string {
     let year = parts[2];
     if (year.length === 2) year = '20' + year;
     if (year.length === 4 && +month >= 1 && +month <= 12 && +day >= 1 && +day <= 31) {
-      return `${year}-${month}-${day}`;
+      const iso = `${year}-${month}-${day}`;
+      const parsed = new Date(`${iso}T00:00:00Z`);
+      return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === iso ? iso : '';
     }
   }
-  return today.toISOString().slice(0, 10);
+  return '';
 }
 
 /** Trailing "New M-PESA balance is Ksh2,340.00." */
@@ -197,7 +202,7 @@ const PATTERNS: Array<{
         reference: m[1],
         amount: money(m[2]),
         type: 'expense',
-        date: m[4] ? mpesaDateToIso(m[4], today) : today.toISOString().slice(0, 10),
+        date: m[4] ? mpesaDateToIso(m[4], today) : todayLocal(today),
         description: `Paid to ${merchant}`,
         category: categorizeKenyanDescription(merchant),
         kind: 'buygoods',
@@ -286,6 +291,30 @@ const PATTERNS: Array<{
     }),
   },
   {
+    kind: 'receive',
+    re: new RegExp(`${REF}\\s+Confirmed\\.?\\s*You\\s+have\\s+received\\s+${AMT}\\s+from\\s+(.+?)(?:\\.(?:\\s|$)|\\s+(?:New\\s+M-?PESA|Transaction\\s+cost)|$)`, 'i'),
+    build: (m, today) => {
+      const who = cleanName(m[3]);
+      const category = categorizeKenyanDescription(who);
+      return {
+        reference: m[1], amount: money(m[2]), type: 'income', date: todayLocal(today),
+        description: `Received from ${who}`, category: category === 'Shopping & Essentials' ? 'Salary & Primary Income' : category,
+        kind: 'receive', counterparty: who,
+      };
+    },
+  },
+  {
+    kind: 'send',
+    re: new RegExp(`${REF}\\s+Confirmed\\.?\\s*${AMT}\\s+sent\\s+to\\s+(.+?)(?:\\.(?:\\s|$)|\\s+(?:New\\s+M-?PESA|Transaction\\s+cost)|$)`, 'i'),
+    build: (m, today) => {
+      const who = cleanName(m[3]);
+      return {
+        reference: m[1], amount: money(m[2]), type: 'expense', date: todayLocal(today),
+        description: `Sent to ${who}`, category: categorizeKenyanDescription(who), kind: 'send', counterparty: who,
+      };
+    },
+  },
+  {
     // "Fuliza M-PESA amount is Ksh500.00. Interest charged Ksh5.00..."
     kind: 'fuliza',
     re: new RegExp(`${REF}\\s+Confirmed\\.?\\s*Fuliza\\s+M-?PESA\\s+amount\\s+is\\s+${AMT}`, 'i'),
@@ -293,7 +322,7 @@ const PATTERNS: Array<{
       reference: m[1],
       amount: money(m[2]),
       type: 'expense',
-      date: today.toISOString().slice(0, 10),
+      date: todayLocal(today),
       description: 'Fuliza overdraft drawn',
       category: 'Loan & Fuliza Repayment',
       kind: 'fuliza',
@@ -316,11 +345,17 @@ export function parseMpesaSms(
     const m = clean.match(re);
     if (m) {
       const base = build(m, today);
-      if (!Number.isFinite(base.amount) || base.amount <= 0) return null;
+      const statedDate = clean.match(/\bon\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\b/i)?.[1];
+      const date = statedDate ? mpesaDateToIso(statedDate, today) : base.date;
+      if (!Number.isFinite(base.amount) || base.amount <= 0 || !date) return null;
       const balance = extractBalance(clean);
       const cost = extractCost(clean);
+      if (cost !== undefined && !Number.isFinite(cost)) return null;
       return {
         ...base,
+        date,
+        reference: base.reference.toUpperCase(),
+        dateInferred: !statedDate,
         ...(balance !== undefined ? { balance } : {}),
         ...(cost !== undefined ? { cost } : {}),
       };
@@ -329,90 +364,14 @@ export function parseMpesaSms(
   return null;
 }
 
-/**
- * Parse a blob that may contain several SMS messages and/or M-Pesa CSV rows.
- *
- * Messages are newline-separated in practice, but a single SMS can also wrap
- * across lines when pasted, so a line that fails to parse is retried joined
- * with the following lines.
- */
-export function parseMpesaBlob(
-  rawText: string,
-  today: Date = new Date(),
-): ParsedMpesaMessage[] {
-  const out: ParsedMpesaMessage[] = [];
-  const seen = new Set<string>();
-  const lines = rawText.split('\n');
+export function classifyMpesaDetails(details: string, type: 'income' | 'expense'): { kind: MpesaKind; category: string } {
+  const fee = /(?:fee|charge|cost)\b/i.test(details);
+  const kind: MpesaKind = fee ? 'send'
+    : /fuliza|loan/i.test(details) ? 'fuliza'
+    : /transfer|deposit|withdraw/i.test(details) && /m.?shwari|kcb.*m.?pesa/i.test(details) ? 'mshwari'
+    : /withdraw|cash\s*out/i.test(details) ? 'withdraw'
+    : /deposit|cash\s*in/i.test(details) ? 'deposit'
+    : type === 'income' ? 'receive' : 'send';
 
-  const push = (p: ParsedMpesaMessage | null) => {
-    if (p && !seen.has(p.reference)) {
-      seen.add(p.reference);
-      out.push(p);
-      return true;
-    }
-    return false;
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const csv = parseCsvRow(line, today);
-    if (csv) {
-      push(csv);
-      continue;
-    }
-
-    if (push(parseMpesaSms(line, today))) continue;
-
-    // A wrapped message: try joining with up to the next 3 lines.
-    for (let span = 2; span <= 4 && i + span <= lines.length; span++) {
-      const joined = lines.slice(i, i + span).join(' ');
-      if (push(parseMpesaSms(joined, today))) {
-        i += span - 1;
-        break;
-      }
-    }
-  }
-
-  return out;
-}
-
-/** M-Pesa statement CSV: Receipt No., Date, Details, Status, Paid In, Withdrawn, Balance */
-function parseCsvRow(line: string, today: Date): ParsedMpesaMessage | null {
-  if (!line.includes(',')) return null;
-  const parts = line.split(',').map((p) => p.replace(/"/g, '').trim());
-  if (parts.length < 6) return null;
-  if (parts[0] === 'Receipt No.' || parts[0].length < 8) return null;
-
-  const paidIn = parseFloat(parts[4] || '0');
-  const withdrawn = parseFloat(parts[5] || '0');
-  const details = parts[2] || 'M-Pesa Transaction';
-
-  let amount = 0;
-  let type: 'income' | 'expense' = 'expense';
-  if (paidIn > 0) {
-    amount = paidIn;
-    type = 'income';
-  } else if (withdrawn !== 0) {
-    // Withdrawn is printed negative in M-Pesa statements.
-    amount = Math.abs(withdrawn);
-    type = 'expense';
-  }
-  if (!(amount > 0)) return null;
-
-  const dateRaw = parts[1] || '';
-  const iso = /^\d{4}-\d{2}-\d{2}/.test(dateRaw)
-    ? dateRaw.slice(0, 10)
-    : mpesaDateToIso(dateRaw.split(' ')[0], today);
-
-  return {
-    reference: parts[0],
-    amount: toMoney(amount),
-    type,
-    date: iso,
-    description: details,
-    category: categorizeKenyanDescription(details),
-    kind: type === 'income' ? 'receive' : 'send',
-  };
+  return { kind, category: fee ? 'Transaction Fees' : categorizeKenyanDescription(details) };
 }

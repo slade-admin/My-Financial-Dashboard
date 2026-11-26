@@ -1,84 +1,54 @@
-/**
- * scripts/test-dates.ts  —  npm run test:dates
- *
- * Regression guard for the date off-by-one.
- *
- * A SQL DATE is a calendar date with no time and no zone. node-pg used to
- * hydrate it into a JS Date at LOCAL midnight, and the repo mappers then
- * called .toISOString().split('T')[0] on it — which converts to UTC and
- * therefore rolls the calendar date back a day in any timezone ahead of UTC.
- * In EAT (UTC+3) a transaction stored as 2026-10-31 came back as 2026-10-30.
- *
- * This asserts the round trip is lossless: what we write is what we read.
- */
-import { loadLocalEnv, maskUrl } from './load-env';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { test } from 'node:test';
+import { addAccount, getAccountById } from '../src/lib/repo/accounts';
+import { addTransaction, getTransactions } from '../src/lib/repo/transactions';
+import { addSavingsGoal, getSavingsGoals } from '../src/lib/repo/savings-goals';
+import { addLiability, getLiabilities } from '../src/lib/repo/liabilities';
 import { toDateString, todayLocal } from '../src/lib/repo/types';
+import { createTestUser, withTestDatabase } from './test-db';
 
-async function main() {
-  loadLocalEnv();
-  if (!process.env.DATABASE_URL) {
-    console.error('ERROR: DATABASE_URL is required. Set it in .env.local or pass it inline.');
-    process.exit(1);
-  }
-  console.log(`[date test] database: ${maskUrl(process.env.DATABASE_URL)}`);
-  console.log(`[date test] host timezone offset: ${-new Date().getTimezoneOffset() / 60}h from UTC\n`);
+process.env.TZ = 'Africa/Nairobi';
 
-  // Import after env is loaded, since db.ts reads DATABASE_URL on first use.
-  const { getPool } = await import('../src/lib/db');
-  const { addTransaction, getTransactions } = await import('../src/lib/repo/transactions');
-  const { getAccounts, addAccount } = await import('../src/lib/repo/accounts');
+test('Nairobi calendar dates stay local across month and year boundaries', () => {
+  const monthStart = new Date('2026-11-01T00:30:00+03:00');
+  const yearStart = new Date('2027-01-01T00:30:00+03:00');
+  assert.equal(monthStart.toISOString().slice(0, 10), '2026-10-31');
+  assert.equal(toDateString(monthStart), '2026-11-01');
+  assert.equal(todayLocal(yearStart), '2027-01-01');
+  assert.equal(toDateString(new Date(2024, 1, 29)), '2024-02-29');
+});
 
-  const pool = getPool();
-  const USER = 1;
-  let failures = 0;
-  const check = (ok: boolean, label: string, detail = '') => {
-    console.log(`${ok ? '✓' : '✗'} ${label}${detail ? '  ' + detail : ''}`);
-    if (!ok) failures++;
-  };
-
-  // --- pure helper, no database ---
-  const localMidnight = new Date(2026, 9, 31, 0, 0, 0); // 31 Oct 2026, local
-  check(toDateString(localMidnight) === '2026-10-31',
-        'toDateString keeps the calendar date for a local-midnight Date',
-        `-> ${toDateString(localMidnight)}`);
-  check(toDateString('2026-10-31') === '2026-10-31', 'toDateString passes strings through');
-  check(toDateString(null) === undefined, 'toDateString handles null');
-
-  // The old implementation, shown failing for contrast.
-  const oldWay = localMidnight.toISOString().split('T')[0];
-  console.log(`  (previous implementation produced ${oldWay} for the same Date)`);
-
-  // --- round trip through Postgres ---
-  const accounts = await getAccounts(USER);
-  const acct = accounts[0] ?? (await addAccount(USER, {
-    name: 'Date Test Account', institution: 'test', account_type: 'cash',
-    currency: 'KES', balance: 0, is_asset: true,
-  }));
-
-  const cases = ['2026-10-31', '2026-01-01', '2026-12-31', todayLocal()];
-  const refs: string[] = [];
-  try {
-    for (const want of cases) {
-      const ref = `DATETEST${Date.now()}${Math.floor(Math.random() * 1000)}`;
-      refs.push(ref);
-      await addTransaction(USER, {
-        account_id: acct.id, amount: 1, currency: 'KES', type: 'expense',
-        date: want, description: 'date round-trip test', category: 'Other',
-        reference: ref, import_source: 'manual',
+test('SQL DATE round trips preserve transaction, goal and loan dates', async () => {
+  await withTestDatabase(async ({ pool }) => {
+    const userId = await createTestUser(pool);
+    const wallet = await addAccount(userId, {
+      name: 'Date Test Wallet', institution: 'Test', account_type: 'cash',
+      currency: 'KES', balance: 100, is_asset: true,
+    });
+    const dates = ['2026-10-31', '2026-11-01', '2026-01-01', '2026-12-31', '2024-02-29'];
+    for (const date of dates) {
+      const reference = randomUUID();
+      await addTransaction(userId, {
+        account_id: wallet.id, amount: 1, currency: 'KES', type: 'expense',
+        date, description: 'Date round trip', category: 'Other',
+        reference, import_source: 'manual',
       });
-      const rows = await getTransactions(USER, { limit: 200 });
-      const got = rows.find((t) => t.reference === ref)?.date;
-      check(got === want, `round trip ${want}`, `-> read back ${got}`);
+      const saved = await getTransactions(userId, { search: reference });
+      assert.equal(saved[0]?.date, date);
     }
-  } finally {
-    for (const r of refs) {
-      await pool.query('DELETE FROM transactions WHERE user_id = $1 AND reference = $2', [USER, r]);
-    }
-    await pool.end();
-  }
+    assert.equal((await getAccountById(userId, wallet.id))?.balance, 95);
 
-  console.log(failures === 0 ? '\nAll date checks passed.' : `\n${failures} check(s) FAILED.`);
-  process.exit(failures === 0 ? 0 : 1);
-}
-
-main().catch((e) => { console.error(e); process.exit(1); });
+    const goal = await addSavingsGoal(userId, {
+      name: 'Year-end Goal', target_amount: 100, current_amount: 0,
+      currency: 'KES', target_date: '2026-12-31',
+    });
+    const liability = await addLiability(userId, {
+      name: 'Month-start Loan', creditor: 'Test', category: 'personal_loan',
+      principal_amount: 100, outstanding_balance: 50,
+      currency: 'KES', due_date: '2026-11-01',
+    });
+    assert.equal((await getSavingsGoals(userId)).find((g) => g.id === goal.id)?.target_date, '2026-12-31');
+    assert.equal((await getLiabilities(userId)).find((l) => l.id === liability.id)?.due_date, '2026-11-01');
+  });
+});

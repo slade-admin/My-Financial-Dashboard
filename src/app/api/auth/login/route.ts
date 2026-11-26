@@ -15,6 +15,8 @@ import {
   recordLoginAttempt,
 } from '@/lib/repo/auth';
 import { SESSION_COOKIE, COOKIE_OPTIONS } from '@/lib/session';
+import { apiError } from '@/lib/errors';
+import { emailInput, objectInput, passwordInput } from '@/lib/validation';
 
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -24,18 +26,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { email, password } = body as Record<string, string>;
-
-  if (!email || !password) {
-    return NextResponse.json(
-      { error: 'email and password are required' },
-      { status: 400 },
-    );
-  }
-
-  const identifier = email.toLowerCase().trim();
-
   try {
+    const input = objectInput(body);
+    const identifier = emailInput(input.email);
+    const password = passwordInput(input.password);
     if (await isRateLimited(identifier)) {
       return NextResponse.json(
         { error: 'Too many failed login attempts. Try again in 15 minutes.' },
@@ -61,7 +55,6 @@ export async function POST(req: NextRequest) {
     response.cookies.set(SESSION_COOKIE, token, COOKIE_OPTIONS);
     return response;
   } catch (err) {
-    console.error('[/api/auth/login]', err);
-    return NextResponse.json({ error: 'Login failed' }, { status: 500 });
+    return apiError(err, 'POST /api/auth/login');
   }
 }

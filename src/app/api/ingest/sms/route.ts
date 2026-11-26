@@ -26,68 +26,16 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { validateIngestToken } from '@/lib/repo/auth';
-import { parseSms, type ParsedSms } from '@/lib/sms';
-import { getAccounts, addAccount } from '@/lib/repo/accounts';
-import { addTransaction } from '@/lib/repo/transactions';
+import { ingestSms } from '@/lib/repo/ingestion';
 import { apiError } from '@/lib/errors';
-import type { PersonalAccount } from '@/lib/repo/types';
+import { accountId as validAccountId } from '@/lib/money';
+import { timestampInput } from '@/lib/validation';
 
 /** Pull "Bearer xxx" out of the Authorization header. */
 function bearer(req: NextRequest): string | null {
   const h = req.headers.get('authorization') ?? '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   return m ? m[1].trim() : null;
-}
-
-/**
- * Find the account a parsed message belongs to, creating it on first use.
- *
- * Without this the forwarder would fail until the user manually created a
- * matching account, which is a poor first-run experience for a background
- * automation that cannot prompt anybody.
- *
- * M-Pesa messages go to the mobile-money account. Bank alerts go to an
- * account matching the institution the alert names, so an Equity salary
- * credit does not land in the M-Pesa balance.
- */
-async function resolveAccount(userId: number, parsed: ParsedSms): Promise<PersonalAccount> {
-  const accounts = await getAccounts(userId);
-
-  if (parsed.source === 'bank') {
-    const inst = parsed.institution;
-    if (inst) {
-      const needle = inst.toLowerCase();
-      const match = accounts.find(
-        (a) =>
-          (a.institution ?? '').toLowerCase().includes(needle) ||
-          needle.includes((a.institution ?? '\u0000').toLowerCase()) ||
-          a.name.toLowerCase().includes(needle),
-      );
-      if (match) return match;
-    }
-    return addAccount(userId, {
-      name: inst ?? 'Bank Account',
-      institution: inst ?? 'Bank',
-      account_type: 'bank_checking',
-      currency: 'KES',
-      balance: 0,
-      is_asset: true,
-    });
-  }
-
-  const existing =
-    accounts.find((a) => a.account_type === 'mobile_money' && /m-?pesa/i.test(a.name)) ??
-    accounts.find((a) => a.account_type === 'mobile_money');
-  if (existing) return existing;
-
-  return addAccount(userId, {
-    name: 'M-PESA',
-    institution: 'Safaricom',
-    account_type: 'mobile_money',
-    currency: 'KES',
-    balance: 0,
-    is_asset: true,
-  });
 }
 
 export async function POST(req: NextRequest) {
@@ -108,14 +56,22 @@ export async function POST(req: NextRequest) {
     // Accept JSON {message} or a raw text/plain body.
     let message = '';
     let sender: string | undefined;
+    let accountId: string | number | undefined;
+    let counterpartAccountId: string | number | undefined;
+    let receivedAt: string | undefined;
     const contentType = req.headers.get('content-type') ?? '';
     if (contentType.includes('application/json')) {
       try {
         const body = (await req.json()) as {
           message?: string; text?: string; body?: string; sender?: string; from?: string;
+          accountId?: string | number; counterpartAccountId?: string | number;
+          receivedAt?: string;
         };
         message = body.message ?? body.text ?? body.body ?? '';
         sender = body.sender ?? body.from;
+        accountId = body.accountId;
+        counterpartAccountId = body.counterpartAccountId;
+        receivedAt = body.receivedAt;
       } catch {
         return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
       }
@@ -123,12 +79,19 @@ export async function POST(req: NextRequest) {
       message = await req.text();
     }
 
-    if (!message.trim()) {
+    if (typeof message !== 'string' || !message.trim()) {
       return NextResponse.json({ error: 'Empty message' }, { status: 400 });
     }
 
-    const parsed = parseSms(message, sender);
-    if (!parsed) {
+    if (sender !== undefined && typeof sender !== 'string') {
+      return NextResponse.json({ error: 'Sender must be text' }, { status: 400 });
+    }
+    if (receivedAt !== undefined) timestampInput(receivedAt);
+    if (accountId !== undefined) validAccountId(accountId);
+    if (counterpartAccountId !== undefined) validAccountId(counterpartAccountId);
+    if (message.length > 10000) return NextResponse.json({ error: 'Send one SMS at a time' }, { status: 400 });
+    const result = await ingestSms(userId, { message, sender, accountId, counterpartAccountId, receivedAt });
+    if (!result) {
       // 422, not 500: the request was well-formed, the content just was not a
       // transaction (promos, balance notices, OTPs). The forwarder should not
       // retry these, and 4xx tells it so.
@@ -138,46 +101,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const account = await resolveAccount(userId, parsed);
-
-    const { transaction, isDuplicate } = await addTransaction(userId, {
-      account_id: account.id,
-      amount: parsed.amount,
-      currency: 'KES',
-      type: parsed.type,
-      date: parsed.date,
-      description: parsed.description,
-      category: parsed.category,
-      reference: parsed.reference,
-      import_source: parsed.source === 'mpesa' ? 'mpesa_sms' : 'bank_sms',
+    return NextResponse.json({ ok: true, ...result }, {
+      status: result.needsReview ? 202 : result.duplicate ? 200 : 201,
     });
-
-    return NextResponse.json(
-      {
-        ok: true,
-        duplicate: isDuplicate,
-        transaction: {
-          id: transaction.id,
-          amount: transaction.amount,
-          type: transaction.type,
-          date: transaction.date,
-          description: transaction.description,
-          category: transaction.category,
-          reference: transaction.reference,
-        },
-        parsed: {
-          source: parsed.source,
-          kind: parsed.kind,
-          institution: parsed.institution,
-          counterparty: parsed.counterparty,
-          balance: parsed.balance,
-          cost: parsed.cost,
-          syntheticReference: parsed.syntheticReference,
-        },
-        account: { id: account.id, name: account.name },
-      },
-      { status: isDuplicate ? 200 : 201 },
-    );
   } catch (error) {
     return apiError(error, 'POST /api/ingest/sms');
   }

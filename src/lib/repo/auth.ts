@@ -6,6 +6,8 @@
  */
 import { getPool } from '@/lib/db';
 import { hashSecret, verifySecret, randomToken } from '@/lib/crypto';
+import { birthDateInput, countryInput, emailInput, passwordInput, textInput } from '../validation';
+import { BadRequestError } from '../errors';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -62,20 +64,23 @@ export async function createUser(input: {
   country?: string;
   dob?: string;
 }): Promise<UserRow> {
+  const email = emailInput(input.email);
+  const password = passwordInput(input.password, true);
+  const name = textInput(input.full_name, 'Full name', 255);
+  const phone = textInput(input.phone_number, 'Phone number', 30, true) || null;
+  const country = countryInput(input.country === undefined ? 'KE' : input.country);
+  const dob = birthDateInput(input.dob) || null;
   const pool = getPool();
-  const hash = await hashSecret(input.password);
+  const hash = await hashSecret(password);
 
   const result = await pool.query<UserRow>(
     `INSERT INTO users (email, password_hash, full_name, phone_number, country, dob)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, email, full_name, phone_number, country, dob, created_at`,
     [
-      input.email.toLowerCase().trim(),
+      email,
       hash,
-      input.full_name.trim(),
-      input.phone_number ?? null,
-      input.country ?? 'KE',
-      input.dob ?? null,
+      name, phone, country, dob,
     ],
   );
   return result.rows[0];
@@ -86,11 +91,13 @@ export async function verifyLogin(
   email: string,
   password: string,
 ): Promise<UserRow | null> {
+  const identifier = emailInput(email);
+  passwordInput(password);
   const pool = getPool();
   const result = await pool.query<UserRow & { password_hash: string }>(
     `SELECT id, email, full_name, phone_number, country, dob, created_at, password_hash
      FROM users WHERE email = $1`,
-    [email.toLowerCase().trim()],
+    [identifier],
   );
 
   if (result.rows.length === 0) {
@@ -136,22 +143,22 @@ export async function updateProfile(
 
   if (input.full_name !== undefined) {
     sets.push(`full_name = $${idx++}`);
-    values.push(input.full_name.trim());
+    values.push(textInput(input.full_name, 'Full name', 255));
   }
   if (input.phone_number !== undefined) {
     sets.push(`phone_number = $${idx++}`);
-    values.push(input.phone_number);
+    values.push(textInput(input.phone_number, 'Phone number', 30, true) || null);
   }
   if (input.country !== undefined) {
     sets.push(`country = $${idx++}`);
-    values.push(input.country);
+    values.push(countryInput(input.country));
   }
   if (input.dob !== undefined) {
     sets.push(`dob = $${idx++}`);
-    values.push(input.dob);
+    values.push(birthDateInput(input.dob) || null);
   }
 
-  if (sets.length === 0) throw new Error('No fields to update');
+  if (sets.length === 0) throw new BadRequestError('No fields to update.');
 
   values.push(userId);
   const result = await pool.query<UserRow>(
@@ -274,6 +281,7 @@ export async function createIngestToken(
   userId: number,
   label?: string,
 ): Promise<{ token: string; row: IngestTokenRow }> {
+  const name = textInput(label, 'Token label', 100, true) || null;
   const pool = getPool();
   const selector = randomToken(12); // 24 hex chars, fits VARCHAR(32)
   const verifier = randomToken(32); // 64 hex chars — the actual secret
@@ -283,7 +291,7 @@ export async function createIngestToken(
     `INSERT INTO ingest_tokens (user_id, selector, token_hash, label)
      VALUES ($1, $2, $3, $4)
      RETURNING id, user_id, label, last_used_at, created_at`,
-    [userId, selector, hash, label ?? null],
+    [userId, selector, hash, name],
   );
 
   return { token: `${selector}.${verifier}`, row: result.rows[0] };
@@ -351,4 +359,24 @@ export async function deleteIngestToken(
     `DELETE FROM ingest_tokens WHERE id = $1 AND user_id = $2`,
     [tokenId, userId],
   );
+}
+
+export async function recoverAccount(email: string, password: string): Promise<void> {
+  const identifier = emailInput(email);
+  const hash = await hashSecret(passwordInput(password, true));
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const user = await client.query('SELECT id FROM users WHERE email=$1 FOR UPDATE', [identifier]);
+    if (!user.rowCount) throw new BadRequestError('Account not found. Check the sign-in email.');
+    const id = user.rows[0].id;
+    await client.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, id]);
+    await client.query('DELETE FROM sessions WHERE user_id=$1', [id]);
+    await client.query('DELETE FROM ingest_tokens WHERE user_id=$1', [id]);
+    await client.query('DELETE FROM login_attempts WHERE identifier=$1', [identifier]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
 }

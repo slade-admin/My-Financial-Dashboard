@@ -5,12 +5,10 @@
  * Used by the frontend to check session state on load.
  */
 import { NextResponse } from 'next/server';
-import { getSessionUser } from '@/lib/session';
+import { currentUser } from '@/lib/session';
+import { apiError } from '@/lib/errors';
 
 export async function GET() {
-  const user = await getSessionUser();
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  return NextResponse.json({ user });
+  try { return NextResponse.json({ user: await currentUser() }); }
+  catch (error) { return apiError(error, 'GET /api/auth/me'); }
 }

@@ -1,27 +1,37 @@
 export interface PersonalAccount {
   id: string | number;
+  version?: number;
   name: string;
   institution: string;
   account_type: 'mobile_money' | 'bank_savings' | 'bank_checking' | 'sacco' | 'cash' | 'investment';
   currency: string;
   balance: number;
+  opening_balance?: number;
+  account_identifier?: string;
   is_asset: boolean;
   updated_at?: string;
 }
 
 export interface PersonalTransaction {
   id: string | number;
+  version?: number;
   account_id: string | number;
+  voided_at?: string;
   account_name?: string;
   amount: number;
   currency: string;
-  type: 'income' | 'expense' | 'transfer';
+  type: 'income' | 'expense' | 'transfer' | 'adjustment';
+  transfer_account_id?: string | number;
+  transfer_account_name?: string;
+  fee_amount?: number;
+  fee_account_id?: string | number;
+  parent_transaction_id?: string | number;
+  import_batch_id?: string;
+  source_fingerprint?: string;
   date: string; // YYYY-MM-DD
   description: string;
   category: string;
   reference?: string;
-  // 'bank_sms' added in Phase 3 for forwarded bank alerts. The column is a
-  // plain VARCHAR(50) with no CHECK constraint, so no migration is needed.
   import_source: 'manual' | 'mpesa_statement' | 'bank_csv' | 'mpesa_sms' | 'bank_sms';
 }
 
@@ -32,6 +42,7 @@ export interface AddTransactionResult {
 
 export interface PersonalAsset {
   id: string | number;
+  version?: number;
   name: string;
   category: 'real_estate' | 'vehicle' | 'investments' | 'land' | 'livestock' | 'valuables' | 'other';
   estimated_value: number;
@@ -42,6 +53,7 @@ export interface PersonalAsset {
 
 export interface PersonalLiability {
   id: string | number;
+  version?: number;
   name: string;
   creditor: string;
   category: 'personal_loan' | 'mortgage' | 'car_loan' | 'helb' | 'sacco_loan' | 'mobile_loan' | 'credit_card' | 'other';
@@ -56,13 +68,19 @@ export interface PersonalLiability {
 
 export interface PersonalBudget {
   id: string | number;
+  version?: number;
   category: string;
   monthly_limit: number;
   currency: string;
+  month?: string;
+  actual_spending?: number;
+  remaining?: number;
+  overspent?: boolean;
 }
 
 export interface PersonalSavingsGoal {
   id: string | number;
+  version?: number;
   name: string;
   target_amount: number;
   current_amount: number;
@@ -100,9 +118,41 @@ export interface ExpenseByCategory {
 
 export interface TransactionFilters {
   limit?: number;
+  offset?: number;
   category?: string;
   search?: string;
   accountId?: string | number;
+  transactionType?: PersonalTransaction['type'];
+  startDate?: string;
+  endDate?: string;
+  needsReview?: boolean;
+  status?: 'active' | 'reversed' | 'all';
+}
+
+export interface TransactionPage {
+  transactions: PersonalTransaction[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  needsReviewCount: number;
+}
+
+export interface GoalContribution {
+  id: number;
+  amount: number;
+  date: string;
+  note: string;
+  created_at: string;
+}
+
+export interface HistoryEntry {
+  id: string;
+  action: 'create' | 'update' | 'reverse';
+  reason: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown>;
+  created_at: string;
 }
 
 /**
@@ -138,9 +188,13 @@ export function toDateString(
   return undefined;
 }
 
-/** Today's calendar date in local time as 'YYYY-MM-DD'. */
+/** Nairobi calendar date, independent of the server or browser timezone. */
 export function todayLocal(now: Date = new Date()): string {
-  return toDateString(now)!;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Nairobi', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const part = (type: string) => parts.find((p) => p.type === type)!.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
 /**

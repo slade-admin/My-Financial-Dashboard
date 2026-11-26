@@ -13,6 +13,7 @@
  */
 import { parseMpesaSms } from './mpesa';
 import { parseBankSms } from './bank-sms';
+import { createHash } from 'node:crypto';
 
 export type SmsSource = 'mpesa' | 'bank';
 
@@ -33,6 +34,16 @@ export interface ParsedSms {
   kind: string;
   /** True when the reference was derived from content, not supplied. */
   syntheticReference: boolean;
+  accountIdentifier?: string;
+  dateInferred: boolean;
+  ambiguousIdentity: boolean;
+  ambiguousAmount?: boolean;
+  classificationNeedsReview?: boolean;
+  sourceFingerprint: string;
+}
+
+export function smsFingerprint(text: string): string {
+  return createHash('sha256').update(text.replace(/\s+/g, ' ').trim().toLowerCase()).digest('hex');
 }
 
 /**
@@ -58,9 +69,15 @@ export function parseSms(text: string, sender?: string): ParsedSms | null {
       cost: mpesa.cost,
       kind: mpesa.kind,
       syntheticReference: false,
+      dateInferred: !!mpesa.dateInferred,
+      ambiguousIdentity: false,
+      classificationNeedsReview: mpesa.type === 'income' &&
+        /\b(?:bank|equity|kcb|co-?operative|absa|ncba|stanbic|dtb)\b/i.test(text),
+      sourceFingerprint: smsFingerprint(text),
     };
   }
 
+  if (/\b[A-Z0-9]{10}\s+Confirmed\b/i.test(text)) return null;
   const bank = parseBankSms(text);
   if (bank) {
     return {
@@ -75,6 +92,12 @@ export function parseSms(text: string, sender?: string): ParsedSms | null {
       balance: bank.balance,
       kind: bank.direction,
       syntheticReference: bank.syntheticReference,
+      accountIdentifier: bank.account,
+      dateInferred: bank.dateInferred,
+      ambiguousIdentity: bank.ambiguousIdentity,
+      ambiguousAmount: bank.ambiguousAmount,
+      classificationNeedsReview: bank.classificationNeedsReview,
+      sourceFingerprint: smsFingerprint(text),
     };
   }
 

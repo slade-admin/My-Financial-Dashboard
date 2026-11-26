@@ -42,3 +42,11 @@ next-env.d.ts
 
 # local artifacts
 .fintech_ecosystem/
+
+# private financial recovery artifacts
+/backups/
+*.finbackup
+*.finbackup.partial
+*.backup-key
+*.dump
+finance-export*.json

@@ -1,5 +1,21 @@
 import { query } from '../db';
 import { PersonalAsset, toMoney, DbRow} from './types';
+import { moneyInput, requireKES } from '../money';
+import { choiceInput, textInput } from '../validation';
+import { auditedTransaction, editRecord, insertRecord } from './history';
+
+type AssetDetails = Omit<PersonalAsset, 'id'>;
+
+function assetDetails(asset: AssetDetails) {
+  return {
+    name: textInput(asset.name, 'Asset name', 255),
+    category: choiceInput(asset.category,
+      ['real_estate', 'vehicle', 'investments', 'land', 'livestock', 'valuables', 'other'], 'asset category'),
+    estimated_value: moneyInput(asset.estimated_value, 'Asset value', { allowZero: true }),
+    currency: requireKES(asset.currency),
+    notes: textInput(asset.notes, 'Notes', 5000, true) || null,
+  };
+}
 
 export async function getAssets(userId: number): Promise<PersonalAsset[]> {
   const res = await query(
@@ -11,27 +27,21 @@ export async function getAssets(userId: number): Promise<PersonalAsset[]> {
 
 export async function addAsset(
   userId: number,
-  asset: Omit<PersonalAsset, 'id'>
+  asset: Omit<PersonalAsset, 'id'> & { request_id?: string }
 ): Promise<PersonalAsset> {
-  const res = await query(
-    `INSERT INTO assets (user_id, name, category, estimated_value, currency, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [
-      userId,
-      asset.name,
-      asset.category,
-      toMoney(asset.estimated_value),
-      asset.currency || 'KES',
-      asset.notes || null,
-    ]
-  );
-  return mapAssetRow(res.rows[0]);
+  const details = assetDetails(asset);
+  return auditedTransaction('Asset created', async (client) =>
+    mapAssetRow((await insertRecord(client, userId, 'assets', details, asset.request_id)).row));
+}
+
+export async function updateAsset(userId: number, id: string | number, asset: AssetDetails, version: unknown, reason: string) {
+  return mapAssetRow(await editRecord(userId, 'assets', id, version, assetDetails(asset), reason));
 }
 
 function mapAssetRow(r: DbRow): PersonalAsset {
   return {
     id: r.id,
+    version: r.version,
     name: r.name,
     category: r.category,
     estimated_value: toMoney(r.estimated_value),

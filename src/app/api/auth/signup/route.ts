@@ -12,6 +12,7 @@ import { createUser } from '@/lib/repo/auth';
 import { createSession, isRateLimited, recordLoginAttempt } from '@/lib/repo/auth';
 import { SESSION_COOKIE, COOKIE_OPTIONS } from '@/lib/session';
 import { apiError } from '@/lib/errors';
+import { emailInput, objectInput, passwordInput, textInput } from '@/lib/validation';
 
 export async function POST(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
@@ -32,35 +33,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
 
-    const { email, password, full_name, phone_number, country, dob } =
-      body as Record<string, string>;
-
-    if (!email || !password || !full_name) {
-      return NextResponse.json(
-        { error: 'email, password, and full_name are required' },
-        { status: 400 },
-      );
-    }
-
-    if (password.length < 8) {
-      return NextResponse.json(
-        { error: 'Password must be at least 8 characters' },
-        { status: 400 },
-      );
-    }
-
-    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRe.test(email)) {
-      return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
-    }
-
+    const input = objectInput(body);
     const user = await createUser({
-      email,
-      password,
-      full_name,
-      phone_number,
-      country,
-      dob,
+      email: emailInput(input.email),
+      password: passwordInput(input.password, true),
+      full_name: textInput(input.full_name, 'Full name', 255),
+      phone_number: input.phone_number as string | undefined,
+      country: input.country as string | undefined,
+      dob: input.dob as string | undefined,
     });
 
     await recordLoginAttempt(identifier, true);

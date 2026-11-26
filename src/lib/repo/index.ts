@@ -7,3 +7,4 @@ export * from './budgets';
 export * from './savings-goals';
 export * from './categories';
 export * from './networth';
+export * from './history';

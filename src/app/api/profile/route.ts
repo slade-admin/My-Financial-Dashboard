@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { currentUser } from '@/lib/session';
 import { updateProfile } from '@/lib/repo/auth';
-import { apiError } from '@/lib/errors';
+import { apiError, BadRequestError } from '@/lib/errors';
 
 export async function GET() {
   try {
@@ -27,7 +27,11 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
 
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new BadRequestError('A JSON object is required.');
     const { full_name, phone_number, country, dob } = body as Record<string, string>;
+    if ([full_name, phone_number, country, dob].every((field) => field === undefined)) {
+      throw new BadRequestError('No profile fields supplied.');
+    }
 
     const updated = await updateProfile(user.id, { full_name, phone_number, country, dob });
     return NextResponse.json({ user: updated });

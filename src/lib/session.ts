@@ -20,15 +20,8 @@ import { UnauthorizedError } from '@/lib/errors';
 // Renamed from 'hisa_session' with the HisaKenya -> Track-suite rebrand.
 // Anyone holding the old cookie is simply treated as signed out and logs in
 // again; the old rows stay in `sessions` until they expire.
-export const SESSION_COOKIE = 'tracksuite_session';
-
-export const COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax' as const,
-  path: '/',
-  maxAge: 30 * 24 * 60 * 60, // 30 days in seconds
-};
+import { SESSION_COOKIE } from './session-cookie';
+export { SESSION_COOKIE, COOKIE_OPTIONS } from './session-cookie';
 
 /**
  * Resolve the session from the request cookies.
